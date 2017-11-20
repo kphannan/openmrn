@@ -1,18 +1,16 @@
 ifeq ($(TARGET),)
 # if the target is so far undefined
-TARGET := $(shell basename `cd ../; pwd`)
+TARGET := $(notdir $(realpath $(CURDIR)/..))
 endif
-BASENAME = $(shell basename `pwd`)
+BASENAME := $(notdir $(CURDIR))
 SRCDIR = $(abspath ../../../$(BASENAME))
 VPATH = $(SRCDIR)
 
 INCLUDES += -I./ -I../ -I../include 
-ifdef APP_PATH
-INCLUDES += -I$(APP_PATH)
-endif
 INCLUDES += -I$(OPENMRNPATH)/include
 INCLUDES += -I$(OPENMRNPATH)/src
 include $(OPENMRNPATH)/etc/$(TARGET).mk
+include $(OPENMRNPATH)/etc/path.mk
 
 exist := $(wildcard $(SRCDIR)/sources)
 ifneq ($(strip $(exist)),)
@@ -31,6 +29,10 @@ CPPSRCS = $(notdir $(FULLPATHCPPSRCS))
 endif
 endif
 
+ifdef APP_PATH
+INCLUDES += -I$(APP_PATH)
+endif
+
 OBJS = $(CXXSRCS:.cxx=.o) $(CPPSRCS:.cpp=.o) $(CSRCS:.c=.o)
 LIBNAME = lib$(BASENAME).a
 
@@ -45,11 +47,8 @@ MISSING_DEPS:=$(call find_missing_deps,$(DEPS))
 
 ifneq ($(MISSING_DEPS),)
 all docs clean veryclean tests mksubdirs:
-	@echo "******************************************************************"
-	@echo "*"
-	@echo "*   Unable to build for $(TARGET), missing dependencies: $(MISSING_DEPS)"
-	@echo "*"
-	@echo "******************************************************************"
+	@echo "** Ignoring target $(TARGET), because the following libraries are not installed: $(MISSING_DEPS). This is not an error, so please do not report as a bug. If you care about target $(TARGET), make sure the quoted libraries are installed. For most libraries you can check $(OPENMRNPATH)/etc/path.mk to see where we looked for these dependencies."
+
 else
 .PHONY: all
 all: $(LIBNAME)
@@ -74,13 +73,17 @@ all: $(LIBNAME)
 $(LIBNAME): $(OBJS)
 	$(AR) cr $(LIBNAME) $(OBJS)
 	mkdir -p ../lib
-	(cd ../lib ; ln -sf ../$(BASENAME)/$(LIBNAME) . )
+ifeq ($(OS),Windows_NT)
+	cp -f $(LIBNAME) ../lib/
+else
+	(cd ../lib ; ln -sf ../$(BASENAME)/$(LIBNAME) . )	
+endif
 	touch ../lib/timestamp
 
 
 .PHONY: clean
 clean:
-	rm -rf *.o *.d *.a *.so *.dll timestamp
+	rm -rf $(wildcard *.o *.d *.a *.so *.dll) timestamp
 
 .PHONY: veryclean
 veryclean: clean

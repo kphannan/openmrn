@@ -40,7 +40,7 @@
 #define NUM_OPEN_FILES     4
 #else
 /// How many concurrently open fd we support.
-#define NUM_OPEN_FILES     12
+#define NUM_OPEN_FILES     20 //12
 #endif
 
 Device *Device::first = NULL;
@@ -105,17 +105,20 @@ int Device::open(struct _reent *reent, const char *path, int flags, int mode)
     files[fd].flags = flags;
     for (Device *dev = first; dev != NULL; dev = dev->next)
     {
-        if (!strcmp(dev->name, path))
+        if (dev->name)
         {
-            files[fd].dev = dev;
-            int result = dev->open(&files[fd], path, flags, mode);
-            if (result < 0)
+            if (!strcmp(dev->name, path))
             {
-                fd_free(fd);
-                errno = -result;
-                return -1;
+                files[fd].dev = dev;
+                int result = dev->open(&files[fd], path, flags, mode);
+                if (result < 0)
+                {
+                    fd_free(fd);
+                    errno = -result;
+                    return -1;
+                }
+                return fd;
             }
-            return fd;
         }
     }
     // No device found.
@@ -224,6 +227,29 @@ _off_t Device::lseek(struct _reent *reent, int fd, _off_t offset, int whence)
     return result;    
 }
 
+/** Get the status information of a file or device.
+ * @param reent thread safe reentrant structure
+ * @param fd file descriptor to get status of
+ * @param stat structure to fill status info into
+ * @return 0 upon success, -1 upon failure with errno containing the cause
+ */
+int Device::fstat(struct _reent *reent, int fd, struct stat *stat)
+{
+    File* f = file_lookup(fd);
+    if (!f)
+    {
+        /* errno should already be set appropriately */
+        return -1;
+    }
+    ssize_t result = f->dev->fstat(f, stat);
+    if (result < 0)
+    {
+        errno = -result;
+        return -1;
+    }
+    return result;
+}
+
 /** Request and ioctl transaction.
  * @param fd file descriptor
  * @param key ioctl key
@@ -233,7 +259,7 @@ _off_t Device::lseek(struct _reent *reent, int fd, _off_t offset, int whence)
 int Device::ioctl(int fd, unsigned long int key, unsigned long data)
 {
     File* f = file_lookup(fd);
-    if (!f) 
+    if (!f)
     {
         /* errno should already be set appropriately */
         return -1;
@@ -258,8 +284,20 @@ int Device::fcntl(int fd, int cmd, unsigned long data)
 {
     File *file = file_lookup(fd);
 
+    if (!file) 
+    {
+        errno = EBADF;
+        return -1;
+    }
+
     switch (cmd)
     {
+        case F_SETFL:
+            /* on this platform, we ignore O_ASYNC, O_DIRECT, and O_NOATIME */
+            data &= (O_APPEND | O_NONBLOCK);
+            file->flags &= ~(O_APPEND | O_NONBLOCK);
+            file->flags |= data;
+            /* fall through */
         default:
         {
             File* f = file_lookup(fd);
@@ -278,12 +316,6 @@ int Device::fcntl(int fd, int cmd, unsigned long data)
         }  
         case F_GETFL:
             return file->flags;
-        case F_SETFL:
-            /* on this platform, we ignore O_ASYNC, O_DIRECT, and O_NOATIME */
-            data &= (O_APPEND | O_NONBLOCK);
-            file->flags &= ~(O_APPEND | O_NONBLOCK);
-            file->flags |= data;
-            return 0;
     }
 }
 
@@ -305,15 +337,14 @@ off_t Device::lseek(File* f, off_t offset, int whence)
             f->offset += offset;
             return f->offset;
     }
-    errno = EINVAL;
-    return (off_t)-1;
+    return (off_t)-EINVAL;
 }
 
 /** Request an ioctl transaction
  * @param file file reference for this device
- * @param node node reference for this device
  * @param key ioctl key
  * @param data key data
+ * @return 0 upon success or negative error number upon error.
  */
 int Device::ioctl(File *, unsigned long int, unsigned long) {
     return -EINVAL;
@@ -328,7 +359,14 @@ int Device::ioctl(File *, unsigned long int, unsigned long) {
  */
 int Device::fcntl(File *file, int cmd, unsigned long data)
 {
-    return 0;
+    if (cmd == F_SETFL)
+    {
+        return 0;
+    }
+    else
+    {
+        return -EINVAL;
+    }
 }
 
 /** Allocate a free file descriptor.

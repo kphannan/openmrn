@@ -42,7 +42,10 @@ TRYPATH:=$(call findfirst,flock,$(SEARCHPATH))
 ifneq ($(TRYPATH),)
 FLOCKPATH:=$(TRYPATH)
 endif
-endif #TIVAWAREPATH
+endif #FLOCKPATH
+
+
+ifndef OPENMRN_EXPLICIT_DEPS_ONLY
 
 ################ tivaware ##################
 ifndef TIVAWAREPATH
@@ -55,6 +58,10 @@ SEARCHPATH := \
 TRYPATH:=$(call findfirst,driverlib,$(SEARCHPATH))
 ifneq ($(TRYPATH),)
 TIVAWAREPATH:=$(TRYPATH)
+TRYPATH:=$(call findfirst,inc/hw_onewire.h,$(TRYPATH))
+ifneq ($TRYPATH),)
+BUILDTIVAWARE:=$(TRYPATH)
+endif
 endif
 endif #TIVAWAREPATH
 
@@ -177,12 +184,29 @@ FREERTOSPATH:=$(TRYPATH)
 endif
 endif #FREERTOSPATH
 
+################### FreeRTOS+TCP ################
+ifndef FREERTOSTCPPATH
+SEARCHPATH := \
+  /opt/FreeRTOSPlus/TCP \
+  /opt/FreeRTOSPlus/default/TCP \
+  /opt/FreeRTOS/plus-tcp \
+  $(HOME)/FreeRTOSPlus/Source/FreeRTOS-Plus-TCP \
+  /d/FreeRTOSPlus/default/TCP \
+
+TRYPATH:=$(call findfirst,include/FreeRTOS_DNS.h,$(SEARCHPATH))
+ifneq ($(TRYPATH),)
+FREERTOSTCPPATH:=$(TRYPATH)
+endif
+endif #FREERTOSTCPPATH
+
 ################# lpcxpresso ####################
 ifndef LPCXPRESSOPATH
 SEARCHPATH := \
+  /opt/lpcxpresso/default/lpcxpresso \
+  /opt/lpcxpresso/lpcxpresso_*/lpcxpresso \
   /usr/local/lpcxpresso_*/lpcxpresso \
 
-TRYPATH:=$(call findfirst,tools/bin,$(SEARCHPATH))
+TRYPATH:=$(call findfirst,bin/LPCXpressoWIN.enc,$(SEARCHPATH))
 ifneq ($(TRYPATH),)
 LPCXPRESSOPATH:=$(TRYPATH)
 endif
@@ -220,9 +244,12 @@ endif #ARMGCCPATH
 ################### TI-LINUX-SDK #####################
 ifndef TILINUXSDKPATH
 SEARCHPATH := \
+  /opt/ti/ti-processor-sdk-linux/default \
+  ~/ti-processor-sdk-linux-am335x-evm-03.00.00.04 \
   ~/ti-processor-sdk-linux-am335x-evm-02.00.01.07 \
   /opt/ti-processor-sdk-linux-am335x-evm-02.00.01.07 \
   /opt/ti/ti-processor-sdk-linux-am335x-evm-02.00.01.07 \
+
 
 
 TRYPATH:=$(call findfirst,setup.sh,$(SEARCHPATH))
@@ -231,9 +258,59 @@ TILINUXSDKPATH:=$(TRYPATH)
 endif
 endif #TILINUXSDKPATH
 
+################### ARM-LINUX GCC PATH #####################
+ifndef ARMLINUXGCCPATH
+SEARCHPATH := \
+    $(TILINUXSDKPATH)/linux-devkit/sysroots/x86_64-arago-linux/usr/bin \
+    /usr/bin \
+
+TRYPATH:=$(call findfirst,arm-linux-gnueabihf-gcc,$(SEARCHPATH))
+ifneq ($(TRYPATH),)
+ARMLINUXGCCPATH:=$(TRYPATH)
+endif
+endif #ARMLINUXGCCPATH
+
+################### TI-CC3200-SDK #####################
+ifndef TICC3200SDKPATH
+SEARCHPATH := \
+  /opt/ti/CC3200SDK/default/cc3200-sdk
+
+
+TRYPATH:=$(call findfirst,readme.txt,$(SEARCHPATH))
+ifneq ($(TRYPATH),)
+TICC3200SDKPATH:=$(TRYPATH)
+endif
+endif #TICC3200SDKPATH
+
+################### TI-CC3220-SDK #####################
+ifndef TICC3220SDKPATH
+SEARCHPATH := \
+  /opt/ti/CC3220SDK/default  \
+  /opt/ti/CC3220SDK/simplelink_cc32xx_sdk_1_30_01_03 \
+
+
+TRYPATH:=$(call findfirst,source/ti/devices/cc32xx/driverlib/gpio.c,$(SEARCHPATH))
+ifneq ($(TRYPATH),)
+TICC3220SDKPATH:=$(TRYPATH)
+endif
+endif #TICC3220SDKPATH
+
+################### TI-UNIFLASH-V4 #####################
+ifndef TIUNIFLASH4PATH
+SEARCHPATH := \
+  /opt/ti/uniflash/v4-default  \
+  /opt/ti/uniflash/uniflash_4.1  \
+
+TRYPATH:=$(call findfirst,dslite.sh,$(SEARCHPATH))
+ifneq ($(TRYPATH),)
+TIUNIFLASH4PATH:=$(TRYPATH)
+endif
+endif #TIUNIFLASH4PATH
+
 ################### PRU-ICSS #####################
 ifndef PRUICSSPATH
 SEARCHPATH := \
+  $(TILINUXSDKPATH)/example-applications/pru-icss-4.0.2 \
   $(TILINUXSDKPATH)/example-applications/pru-icss-4.0.1
 
 TRYPATH:=$(call findfirst,ReadMe.txt,$(SEARCHPATH))
@@ -324,15 +401,34 @@ endif #GTESTSRCPATH
 ################### MIPS-ELF-GCC #####################
 ifndef MIPSGCCPATH
 SEARCHPATH := \
+  /opt/CodeSourcery/default_mips_elf \
   /opt/CodeSourcery/Sourcery_CodeBench_Lite_for_MIPS_ELF \
-  /opt/MentorGraphics/default_mips_elf
+  /opt/MentorGraphics/default_mips_elf \
 
+
+# To download go here https://sourcery.mentor.com/GNUToolchain/release3215
+
+# or the aggregate page:
+# https://www.mentor.com/embedded-software/sourcery-tools/sourcery-codebench/editions/lite-edition/
+# and make sure to select the ELF release for MIPS processor.
 
 TRYPATH:=$(call findfirst,bin/mips-sde-elf-g++,$(SEARCHPATH))
 ifneq ($(TRYPATH),)
 MIPSGCCPATH:=$(TRYPATH)
 endif
 endif #MIPSGCCPATH
+
+################### MIPS-ELF-NEWLIB #####################
+ifndef MIPSNEWLIBPATH
+SEARCHPATH := \
+  /opt/newlib/mips-sde-elf \
+  $(MIPSGCCPATH)/mips-sde-elf
+
+TRYPATH:=$(call findfirst,lib/el/mips16/sof/libc.a,$(SEARCHPATH))
+ifneq ($(TRYPATH),)
+MIPSNEWLIBPATH:=$(TRYPATH)
+endif
+endif #MIPSNEWLIBPATH
 
 ################### PIC32MXLIB #####################
 ifndef PIC32MXLIBPATH
@@ -345,6 +441,20 @@ ifneq ($(TRYPATH),)
 PIC32MXLIBPATH:=$(TRYPATH)
 endif
 endif #PIC32MXLIBPATH
+
+################### PIC32MXLEGACYPLIB #####################
+ifndef PIC32MXLEGACYPLIBPATH
+SEARCHPATH := \
+  $(PIC32MXLIBPATH) \
+  /opt/microchip/pic32-plib/default \
+  /opt/microchip/xc32/v1.32 \
+  $(HOME)/train/git/pic32/includes \
+
+TRYPATH:=$(call findfirst,pic32mx/include/peripheral/CAN.h,$(SEARCHPATH))
+ifneq ($(TRYPATH),)
+PIC32MXLEGACYPLIBPATH:=$(TRYPATH)
+endif
+endif #PIC32MXLEGACYPLIBPATH
 
 ##################### OPENOCD ######################
 ifndef OPENOCDPATH
@@ -506,6 +616,19 @@ ESPRTOSSDKPATH:=$(TRYPATH)
 endif
 endif #ESPRTOSSDKPATH
 
+##################### SXMLC ######################
+ifndef SXMLCPATH
+SEARCHPATH := \
+  /opt/sxmlc/default
 
+
+TRYPATH:=$(call findfirst,src/sxmlc.h,$(SEARCHPATH))
+ifneq ($(TRYPATH),)
+SXMLCPATH:=$(TRYPATH)
+endif
+endif #SXMLCPATH
+
+
+endif # ifndef OPENMRN_EXPLICIT_DEPS_ONLY
 endif # if  $(OS)  != Windows_NT
 endif # ifndef OPENMRN_PATH_MK

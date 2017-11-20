@@ -1,0 +1,44 @@
+VPATH := $(SRCDIR)
+
+CSRCS += 
+
+CXXSRCS += \
+           AliasAllocator.cxx \
+           AliasCache.cxx \
+           CanDefs.cxx \
+           ConfigEntry.cxx \
+           ConfigUpdateFlow.cxx \
+           DccAccyProducer.cxx \
+           DefaultNode.cxx \
+           DefaultCdi.cxx \
+           EventHandler.cxx \
+           EventHandlerContainer.cxx \
+           EventHandlerTemplates.cxx \
+           EventService.cxx \
+           If.cxx \
+           IfCan.cxx \
+           IfImpl.cxx \
+           NodeInitializeFlow.cxx \
+           NonAuthoritativeEventProducer.cxx \
+           PIPClient.cxx \
+           RoutingLogic.cxx \
+           TractionDefs.cxx \
+           TractionCvSpace.cxx \
+           TractionThrottle.cxx \
+           TractionTrain.cxx \
+           Velocity.cxx \
+           WriteHelper.cxx \
+           Datagram.cxx \
+           DatagramCan.cxx \
+           MemoryConfig.cxx \
+           SimpleNodeInfo.cxx \
+           SimpleNodeInfoMockUserFile.cxx \
+           SimpleStack.cxx \
+           TractionTestTrain.cxx \
+           TractionProxy.cxx \
+           TcpDefs.cxx \
+           nmranet_constants.cxx
+
+
+DEAD_CXX +=  \
+           Stream.cxx \

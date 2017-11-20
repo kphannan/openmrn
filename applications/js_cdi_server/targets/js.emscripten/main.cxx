@@ -49,23 +49,22 @@
 #include "executor/Executor.hxx"
 #include "executor/Service.hxx"
 
-#include "nmranet/SimpleStack.hxx"
-#include "nmranet/SimpleNodeInfoMockUserFile.hxx"
+#include "openlcb/SimpleStack.hxx"
+#include "openlcb/SimpleNodeInfoMockUserFile.hxx"
 
-namespace nmranet {
+namespace openlcb {
 extern const SimpleNodeStaticValues SNIP_STATIC_DATA = {
     4,               "OpenMRN", "CDI test server",
     "node.js", "1.00"};
 }
 
-nmranet::MockSNIPUserFile snip_user_file(
+openlcb::MockSNIPUserFile snip_user_file(
     "Default user name", "Default user description");
-const char *const nmranet::SNIP_DYNAMIC_FILENAME =
-    nmranet::MockSNIPUserFile::snip_user_file_path;
+const char *const openlcb::SNIP_DYNAMIC_FILENAME =
+    openlcb::MockSNIPUserFile::snip_user_file_path;
 
-const uint64_t node_id = 0x0501010118F3ULL;
-nmranet::SimpleCanStack stack(node_id);
-GcPacketPrinter packet_printer(stack.can_hub(), false);
+const uint64_t node_id_base = 0x050101011800ULL;
+uint64_t node_id = node_id_base | 0xF3;
 
 OVERRIDE_CONST(gc_generate_newlines, 1);
 
@@ -74,7 +73,7 @@ int upstream_port = 12021;
 const char *upstream_host = nullptr;
 const char *cdi_file = nullptr;
 
-namespace nmranet {
+namespace openlcb {
 /// This symbol contains the embedded text of the CDI xml file.
 const char CDI_DATA[128*1024] = {0,};
 }
@@ -82,7 +81,7 @@ const char CDI_DATA[128*1024] = {0,};
 void usage(const char *e)
 {
     fprintf(stderr,
-        "Usage: %s [-p port] [-u hub_host [-q hub_port]] -x cdi_file\n\n", e);
+        "Usage: %s [-p port] [-u hub_host [-q hub_port]] [-n id] -x cdi_file\n\n", e);
     fprintf(stderr, "\n\nArguments:\n");
     fprintf(stderr,
             "\t-c filename   is the filename for the CDI (xml text).\n");
@@ -94,13 +93,15 @@ void usage(const char *e)
                     "hub. If specified, this program will connect to that hub for the CAN-bus.\n");
     fprintf(stderr,
             "\t-q upstream_port   is the port number for the upstream hub.\n");
+    fprintf(stderr,
+            "\t-n id   sets the lowest 8 bits of the node id. Valid values: 0..255. Default: 243.\n");
     exit(1);
 }
 
 void parse_args(int argc, char *argv[])
 {
     int opt;
-    while ((opt = getopt(argc, argv, "hp:u:q:x:")) >= 0)
+    while ((opt = getopt(argc, argv, "hp:u:q:x:n:")) >= 0)
     {
         switch (opt)
         {
@@ -119,6 +120,9 @@ void parse_args(int argc, char *argv[])
             case 'q':
                 upstream_port = atoi(optarg);
                 break;
+            case 'n':
+                node_id = node_id_base + atoi(optarg);
+                break;
             case 'x':
                 cdi_file = optarg;
                 break;
@@ -132,8 +136,8 @@ void parse_args(int argc, char *argv[])
         usage(argv[0]);
     }
     string contents = read_file_to_string(cdi_file);
-    if (contents.size() + 1 <= sizeof(nmranet::CDI_DATA)) {
-        memcpy((char*)nmranet::CDI_DATA, contents.c_str(), contents.size() + 1);
+    if (contents.size() + 1 <= sizeof(openlcb::CDI_DATA)) {
+        memcpy((char*)openlcb::CDI_DATA, contents.c_str(), contents.size() + 1);
     } else {
         DIE("CDI file too large.");
     }
@@ -147,6 +151,13 @@ void parse_args(int argc, char *argv[])
 int appl_main(int argc, char *argv[])
 {
     parse_args(argc, argv);
+    openlcb::SimpleCanStack stack(node_id);
+    const size_t configlen = 16*1024;
+    uint8_t* cdispace = new uint8_t[configlen];
+    memset(cdispace, 0, configlen);
+    openlcb::ReadWriteMemoryBlock ramblock(cdispace, configlen);
+    stack.memory_config_handler()->registry()->insert(nullptr, openlcb::MemoryConfigDefs::SPACE_CONFIG, &ramblock);
+    GcPacketPrinter packet_printer(stack.can_hub(), false);
     std::unique_ptr<JSTcpHub> hub;
     if (port > 0) {
         hub.reset(new JSTcpHub(stack.can_hub(), port));

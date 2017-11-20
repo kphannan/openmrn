@@ -6,6 +6,7 @@
 #include "TivaGPIO.hxx"
 #include "DummyGPIO.hxx"
 
+#include "inc/hw_types.h"
 #include "inc/hw_memmap.h"
 #include "inc/hw_ints.h"
 #include "inc/hw_timer.h"
@@ -81,7 +82,7 @@ struct Debug {
     typedef DummyPin RailcomAnyData;
     typedef DummyPin RailcomPackets;
     typedef DummyPin RailcomCh2Data;
-
+  typedef DummyPin RailcomRxActivate;
 
   typedef LED_GOLD_SW_Pin DetectRepeat;
 };
@@ -128,7 +129,7 @@ struct DCCDecode
     static inline void after_feedback_hook() {}
 };
 
-#define HAVE_RAILCOM
+//#define HAVE_RAILCOM
 
 struct RailcomHw
 {

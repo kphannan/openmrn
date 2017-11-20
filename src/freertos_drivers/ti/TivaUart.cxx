@@ -33,6 +33,8 @@
 
 #include <algorithm>
 
+#include <stdint.h>
+
 #include "inc/hw_types.h"
 #include "inc/hw_memmap.h"
 #include "inc/hw_ints.h"
@@ -115,7 +117,6 @@ TivaUart::TivaUart(const char *name, unsigned long base, uint32_t interrupt)
 }
 
 /** Enable use of the device.
- * @param dev device to enable
  */
 void TivaUart::enable()
 {

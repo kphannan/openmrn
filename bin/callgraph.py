@@ -21,6 +21,9 @@ a_re = re.compile('\t.word[ \t]*0x([0-9a-f]*)$')
 # determine how long that block of code is.
 pa_re = re.compile('(^[0-9a-f]*):\t')
 
+# Regexp for finding template arguments
+tmpl_re = re.compile('.*(<[^<>]*>).*')
+
 _blacklist_pre = ['__', 'str', 'f_', 'VIDEO_']
 _blacklist_cont = ['printf']
 
@@ -44,7 +47,10 @@ FLAGS.verbose = False
 FLAGS.map_file = None
 FLAGS.min_size = 0
 FLAGS.demangle = True
-
+FLAGS.strip_template = True
+FLAGS.objects = False
+FLAGS.max_indep = 1000000000
+FLAGS.focus_re = None
 
 def Blacklist(s):
     if s in _blacklist: return True
@@ -95,7 +101,13 @@ class MapEntry(object):
     return "MapEntry section %s subsection %s address 0x%8x length %s lib %s obj %s fun %s" % (
       self.section,self.subsection,self.address,self.length,self.library,self.objfile,self.function) 
 
-
+def StripTemplate(name):
+  while True:
+    m = tmpl_re.match(name)
+    if m is None: break
+    name = name[:m.start(1)] + name[m.end(1):]
+  return name
+  
 class Symbol(object):
   """Represents one linker symbol in the linked executable"""
 
@@ -141,8 +153,12 @@ class Symbol(object):
       print >>sys.stderr,"Not processed? ", self.name
       cyclestring = "N"
       self.total_code_size = self.codesize
+    if FLAGS.strip_template:
+      displayname = StripTemplate(self.displayname)
+    else:
+      displayname = self.displayname
     return ("%s%s [shape=box, label=\"%s\\n%d / %d %s\"];" %
-            (comment, escape(self.name), self.displayname, self.codesize, self.total_code_size,
+            (comment, escape(self.name), displayname, self.codesize, self.total_code_size,
              cyclestring))
 
   def DebugString(self):
@@ -231,11 +247,15 @@ def ReadMapFile(f):
   cpptext_re = re.compile('^ [.]text[.](.*)$')
   obj_re = re.compile('^ ([.]text)?[ \t]+0x([0-9a-f]*)[ \t]+0x([0-9a-f]*)[ \t]+(?:([a-z/A-Z0-9_\.]*[.]a)[\(])?([a-zA-Z_-]*[.]o)[\)]?$')
 
+  section_start_re = re.compile('Linker script and memory map')
+  in_section = False
   section_re = re.compile('^ (?:[.](?P<section>[-a-zA-Z_]+)(?:[.](?P<subsection>[^ \t\n]+))?)?(?:[ \t]+0x(?P<address>[0-9a-fA-F]+)[ \t]+(?:0x(?P<length>[0-9a-fA-F]+) (?:(?P<library>.*[.]a)[\(])?(?P<object>.*[.]o)[\)]?|(?P<function>[^0].*)))?$');
   count = 0;
   entries = []
   end_of_reason_re = re.compile('Allocating common symbols')
   in_reason = True
+  
+
   pulled_re = re.compile('^(?P<library>.*[.]a)[\(](?P<object>.*[.]o)[\)]$');
   caller_re = re.compile('^ {30}(?:(?P<library>.*[.]a)[\(])?(?P<object>.*[.]o)[\)]? [\(](?P<function>.*)[\)]$');
 
@@ -291,7 +311,14 @@ def ReadMapFile(f):
           object_expn[escape(dst_obj)] = symbol
           print >>sys.stderr, ("expn[%s] = %s"% ( escape(dst_obj), symbol.name))
         object_parent[escape(dst_obj)] = escape(src_obj)
-    m = section_re.match(line)
+    m = section_start_re.match(line)
+    if m:
+      in_section = True
+      section = None
+    if in_section:
+      m = section_re.match(line)
+    else:
+      m = None
     if m:
       count = count + 1
       if False and FLAGS.verbose and not printed:
@@ -301,8 +328,8 @@ def ReadMapFile(f):
       if m.group('section'):
         section = m.group('section')
         subsection = None
-      if section[:6] == 'debug_':
-        continue
+        if section[:6] == 'debug_':
+          continue
       if m.group('subsection'):
         subsection = m.group('subsection')
       if m.group('object'):
@@ -311,7 +338,7 @@ def ReadMapFile(f):
       if m.group('length') is not None and m.group('function') is not None:
         print >>sys.stderr, line
         print >>sys.stderr, "length %s and function %s " % (m.group('length'), m.group('function')), m.groups() 
-      if m.group('function') is not None:
+      if section is not None and m.group('function') is not None:
         entry = MapEntry()
         entry.section = section
         entry.subsection = subsection
@@ -323,7 +350,7 @@ def ReadMapFile(f):
         entry.library = library
         entry.function = m.group('function')
         entries.append(entry)
-      if m.group('address') is not None and m.group('length') is not None:
+      if section is not None and m.group('address') is not None and m.group('length') is not None:
         entry = MapEntry()
         entry.section = section
         entry.subsection = subsection
@@ -390,7 +417,9 @@ def ProcessMapEntries(entries):
       if not (section.address <= sym.address and (section.address + section.length) > sym.address):
         print >>sys.stderr, ("section address mismatch: name %s, address %x, section address %x, section length %d" % (sym.name, sym.address, section.address, section.length))
       elif section.subsection is not None and section.address == sym.address and section.subsection != sym.name and  sym.name != re.sub('D2Ev', 'D1Ev', section.subsection):
-        print >>sys.stderr, ("subsection mismatch: name %s, subsection %s" % (sym.name, section.subsection))
+        print >>sys.stderr, ("subsection mismatch: name '%s', subsection '%s'" % (sym.name, section.subsection))
+        sym.objfile = escape(section.objfile)
+        continue
       else:
         print >>sys.stderr, "objfile found for symbol: ", sym.name, (" :@%x " % section.address), section.objfile
         sym.objfile = escape(section.objfile)
@@ -444,6 +473,7 @@ def BindSymbolsToMain():
       print >>sys.stderr, "symbol %s with no indeps." % symbol.name
       if symbol.objfile is not None:
         objsymbol = GetSymbol(symbol.objfile)
+        if objsymbol.objfile is None: objsymbol.objfile = symbol.objfile
         objsymbol.AddDep(symbol.name)
         if not len(objsymbol.indeps):
           if symbol.objfile in object_expn:
@@ -526,6 +556,7 @@ def PrintObjects():
 
 def PrintOutput():
   print "digraph g {"
+  print "rankdir=LR"
 
   # first print names
   for name, symbol in all_symbols.iteritems():
@@ -533,10 +564,12 @@ def PrintOutput():
   # then print links
   for name, symbol in all_symbols.iteritems():
     for dname, dep_symbol in symbol.deps.iteritems():
-      if dep_symbol.blacklisted: continue
-      if dep_symbol.removed_by_filter: continue
-      if symbol.removed_by_filter: continue
-      print "%s -> %s;" % (escape(symbol.name), escape(dep_symbol.name));
+      do_kill = False
+      if dep_symbol.blacklisted: do_kill = True
+      if dep_symbol.removed_by_filter: do_kill = True
+      if len(dep_symbol.indeps) > FLAGS.max_indep: do_kill = True
+      if symbol.removed_by_filter: do_kill = True
+      print "%s%s -> %s;" % ("//" if do_kill else "" ,escape(symbol.name), escape(dep_symbol.name));
   print "}"
   return
 
@@ -566,18 +599,54 @@ def PrintOutput():
   print "}"
 
 
+def PrintObjectGraph():
+  objects = dict()
+  # adds symbols to object mapping and calculate object file codesize
+  for sym in all_symbols.itervalues():
+    if sym.objfile is None:
+      sym.objfile = "None"
+      print >>sys.stderr, ("Symbol with no object file %s size %d" % (sym.name, sym.codesize))
+    if sym.objfile not in objects:
+      obj = Symbol(sym.objfile)
+      objects[sym.objfile] = obj
+    else:
+      obj = objects[sym.objfile]
+    obj.codesize += sym.codesize
+  # adds dependencies
+  for sym in all_symbols.itervalues():
+    obj = objects[sym.objfile]
+    for dep in sym.deps.itervalues():
+      depobj = objects[dep.objfile]
+      print >>sys.stderr, ("OBJDEP %s -> %s  [%s -> %s]" % (obj.name, depobj.name, sym.displayname, dep.displayname))
+      obj.deps[depobj.name] = depobj
+      depobj.indeps[obj.name] = obj
+  # print all objects
+  print "digraph g {"
+  for obj in objects.itervalues():
+    print obj.PrintNode()
+  for obj in objects.itervalues():
+    for dname, dep_symbol in obj.deps.iteritems():
+      print "%s -> %s;" % (escape(obj.name), escape(dep_symbol.name));
+  print "}"
+  return
+  
+
 def usage():
-  print "Usage: callgraph.py [-hC] [(-m|--map) mapfile] > callgraph.dot\n"
+  print "Usage: callgraph.py [-hCto] [--min_size bytes] [--max_indep count] [(-m|--map) mapfile] > callgraph.dot\n"
   print """
 Options:
   -h --help: print this message
   -C --[no-]demangle: turns on/off C++ symbol demangling
+  -t: turns off stripping of c+ template arguments
+  -o: print object-level aggregates
+  --min_size bytes: does not display boxes with less total size than quoted
+  --max_indep count: skips edges that go into boxes with more than this many in-edges
   -m --map file: reads file (format gnu LD .map) for additional information
 """
 
 def parseargs():
   try:
-    opts, args = getopt.getopt(sys.argv[1:], "hm:v", ["help", "map=", "demangle", "min_size="])
+    opts, args = getopt.getopt(sys.argv[1:], "hm:vo", ["help", "map=", "demangle", "min_size=", "max_indep=", "objects", "focus="])
   except getopt.GetoptError as err:
     # print help information and exit:
     print str(err) # will print something like "option -a not recognized"
@@ -594,29 +663,63 @@ def parseargs():
     elif o in ("-m", "--map"):
       FLAGS.map_file = a
       print >> sys.stderr, "will read map file ", FLAGS.map_file
+    elif o in ("--focus"):
+      FLAGS.focus_re = re.compile(a)
+      print >> sys.stderr, "focus on symbol like (regexp match) ", a
     elif o in ("-C", "--demangle"):
       FLAGS.demangle = True
+    elif o in ("-t", "--no-strip-template"):
+      FLAGS.strip_template = False
+    elif o in ("-o", "--objects"):
+      FLAGS.objects = True
     elif o in ("--no-demangle"):
       FLAGS.demangle = False
     elif o in ("--min_size"):
       FLAGS.min_size = int(a)
       print >> sys.stderr, "minimum symbol size ", FLAGS.min_size
+    elif o in ("--max_indep"):
+      FLAGS.max_indep = int(a)
+      print >> sys.stderr, "maximum in-degree ", FLAGS.max_indep
     else:
       assert False, "unhandled option"
 
 def ApplyFilters():
+  # symbols from which we want all upstream symbols
   l = []
+  # symbols from which we want all downstream symbols
+  dl = []
   for name, symbol in all_symbols.iteritems():
-    if symbol.total_code_size < FLAGS.min_size:
-      symbol.removed_by_filter = True
+    if FLAGS.focus_re is not None:
+      m = FLAGS.focus_re.search(symbol.displayname)
+      if m:
+        for dname, dep_symbol in symbol.deps.iteritems():
+          dl.append(dep_symbol)
+        for dname, dep_symbol in symbol.indeps.iteritems():
+          l.append(dep_symbol)
+      else:
+        symbol.removed_by_filter = True
+        continue
     else:
-      for dname, dep_symbol in symbol.indeps.iteritems():
-        l.append(dep_symbol)
+      if symbol.total_code_size < FLAGS.min_size:
+        symbol.removed_by_filter = True
+      else:
+        if len(symbol.indeps) > FLAGS.max_indep: continue
+        for dname, dep_symbol in symbol.indeps.iteritems():
+          l.append(dep_symbol)
   # We go into all inwards dependencies and make them show
   for symbol in l:
     if symbol.removed_by_filter:
+      if len(symbol.indeps) > FLAGS.max_indep: continue
       for dname, dep_symbol in symbol.indeps.iteritems():
         l.append(dep_symbol)
+    symbol.removed_by_filter = False
+  # We go into all outwards dependencies and make them show
+  for symbol in dl:
+    print >>sys.stderr, "downstream symbol ", symbol.name
+    if not symbol.removed_by_filter: continue
+    if len(symbol.indeps) > FLAGS.max_indep: continue
+    for dname, dep_symbol in symbol.deps.iteritems():
+      dl.append(dep_symbol)
     symbol.removed_by_filter = False
 
 
@@ -632,7 +735,10 @@ def main():
   CollectTotalSizes()
   ApplyFilters()
   PrintObjects()
-  PrintOutput()
+  if FLAGS.objects:
+    PrintObjectGraph()
+  else:
+    PrintOutput()
 
 if __name__ == "__main__":
     main()

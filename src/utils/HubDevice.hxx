@@ -37,19 +37,26 @@
 #include <unistd.h>
 
 #include "utils/Hub.hxx"
+#include "executor/SemaphoreNotifiableBlock.hxx"
 
 template <class Data> class FdHubWriteFlow;
 
 /// Template-nonspecific base class for @ref FdHubPort. The purpose of this
 /// class is to avoid compiling this code multiple times for differently typed
 /// devices (and thus saving flash space).
-class FdHubPortBase : public Destructable, private Atomic
+class FdHubPortBase : public FdHubPortInterface, private Atomic
 {
 public:
+    /// How many bytes of stack should we allocate to the write thread's stack.
     static const int kWriteThreadStackSize = 1000;
+    /// How many bytes of stack should we allocate to the read thread's stack.
     static const int kReadThreadStackSize = 1000;
+    /// Constructor.
+    /// @param fd is the filedes to read/write
+    /// @param done will be called when this file is closed and removed from
+    /// the hub (usually due to an error).
     FdHubPortBase(int fd, Notifiable *done)
-        : fd_(fd)
+        : FdHubPortInterface(fd)
         , writeThread_(fill_thread_name('W', fd), 3, kWriteThreadStackSize)
         , writeService_(&writeThread_)
         , barrier_(done)
@@ -63,14 +70,21 @@ public:
     {
     }
 
-    int fd()
-    {
-        return fd_;
-    }
-
-    static void fill_thread_name(char* buf, char mode, int fd);
+    /// Puts the desired thread name for the read or write thread.
+    ///
+    /// @param buf where to put ocmputed thread name. Must be at least 15 chars
+    /// long.
+    /// @param mode a character describing read ('R') or write ('W')
+    /// @param fd filedes number that will be rendered into the thread name.
+    ///
+    static void fill_thread_name(char *buf, char mode, int fd);
 
 protected:
+    /// Puts the desired thread name for the read or write thread.
+    ///
+    /// @param mode a character describing read ('R') or write ('W')
+    /// @param fd filedes number that will be rendered into the thread name.
+    /// @return the thread name buffer.
     const char *fill_thread_name(char mode, int fd) {
         fill_thread_name(threadName_, mode, fd);
         return threadName_;
@@ -94,9 +108,9 @@ protected:
             else
             {
                 hasError_ = 1;
-                ::close(fd_);
             }
         }
+        ::close(fd_);
         unregister_write_port();
     }
 
@@ -104,14 +118,15 @@ protected:
     class ReadThreadBase : public OSThread
     {
     public:
+        /// Constructor. @param port is the parent flow.
         ReadThreadBase(FdHubPortBase *port) : port_(port)
         {
         }
 
-        /** This is the minimum number of bytes that we will send. */
+        /** @return the minimum number of bytes that we will send. */
         virtual int unit() = 0;
-        /** We will allocate this many bytes for read buffer. This is the
-         * maximum number of bytes that we'll send. */
+        /** @return we will allocate this many bytes for read buffer. This is
+         * the maximum number of bytes that we'll send. */
         virtual int buf_size() = 0;
         /** Sends off a buffer */
         virtual void send_message(const void *buf, int size) = 0;
@@ -138,16 +153,18 @@ protected:
                         done += ret;
                         continue;
                     }
+                    if ((ret < 0) && (errno == EINTR || errno == EAGAIN))
+                    {
+                        continue;
+                    }
 // Now: we have an error.
-#ifdef __linux__
+#if defined(__linux__)
                     if (!ret)
                     {
                         LOG_ERROR("EOF reading fd %d", port_->fd_);
                     }
-                    else if (errno == EINTR || errno == EAGAIN)
+                    else
                     {
-                        continue;
-                    } else {
                         LOG_ERROR("Error reading fd %d: (%d) %s", port_->fd_,
                             errno, strerror(errno));
                     }
@@ -160,6 +177,7 @@ protected:
         }
 
     protected:
+        /// Parent port.
         FdHubPortBase *port_;
     };
 
@@ -168,8 +186,6 @@ protected:
 
     /** Temporary buffer used for rendering thread names. */
     char threadName_[30];
-    /** The device file descriptor. */
-    int fd_;
     /** This executor is running the writes. */
     Executor<1> writeThread_;
     /** Service for the write flow. */
@@ -191,12 +207,14 @@ template <class Data>
 class FdHubWriteFlow : public StateFlow<Buffer<Data>, QList<1>>
 {
 public:
+    /// Constructor. @param parent is the owning port.
     FdHubWriteFlow(FdHubPortBase *parent)
         : StateFlow<Buffer<Data>, QList<1>>(&parent->writeService_)
         , port_(parent)
     {
     }
 
+    /// Handles the next incoming entry. @return next action
     StateFlowBase::Action entry() OVERRIDE
     {
         const uint8_t *buf =
@@ -232,7 +250,7 @@ public:
             }
             else
             {
-                LOG_ERROR("Error reading fd %d: (%d) %s", port_->fd_, errno,
+                LOG_ERROR("Error writing fd %d: (%d) %s", port_->fd_, errno,
                     strerror(errno));
             }
 #endif
@@ -242,6 +260,7 @@ public:
         return this->release_and_exit();
     }
 
+    /// The owning port.
     FdHubPortBase *port_;
 };
 
@@ -258,6 +277,12 @@ public:
 template <class HFlow> class FdHubPort : public FdHubPortBase
 {
 public:
+    /// Constructor.
+    ///
+    /// @param hub Parent hub where to register *this.
+    /// @param fd file descriptor to read/write
+    /// @param done will be notified when the termination of the port is
+    /// completed.
     FdHubPort(HFlow *hub, int fd, Notifiable *done)
         : FdHubPortBase(fd, done)
         , hub_(hub)
@@ -287,24 +312,31 @@ public:
     class ReadThread : public ReadThreadBase
     {
     public:
+        /// Constructor. @param port is the parent flow.
         ReadThread(FdHubPort<HFlow> *port) : ReadThreadBase(port)
         {
+            init();
             start(port->fill_thread_name('R', port->fd_), 0,
                   port->kReadThreadStackSize);
         }
+        
+        ~ReadThread() {
+            delete semaphores_;
+        }
 
+        /// @return the parent flow
         FdHubPort<HFlow> *port()
         {
             return static_cast<FdHubPort<HFlow> *>(port_);
         }
 
-        /** This is the minimum number of bytes that we will send. */
+        /** @param this is the minimum number of bytes that we will send. */
         int unit() OVERRIDE
         {
             return kUnit;
         }
-        /** We will allocate this many bytes for read buffer. This is the
-         * maximum number of bytes that we'll send. */
+        /** @return We will allocate this many bytes for read buffer. This is
+         * the maximum number of bytes that we'll send. */
         int buf_size() OVERRIDE
         {
             return kBufSize;
@@ -312,15 +344,27 @@ public:
         /** Sends off a buffer */
         void send_message(const void *buf, int size) OVERRIDE;
 
+    private:
+        /// Initializes the semaphore notifiables.
+        void init();
+        /// If non-null, one slot will be acquired for each incoming message.
+        SemaphoreNotifiableBlock* semaphores_{nullptr};
+
+        /** This is the minimum number of bytes that we will send. */
         static const int kUnit;
+        /** We will allocate this many bytes for read buffer. This is the
+         * maximum number of bytes that we'll send. */
         static const int kBufSize;
     };
 
 private:
     friend class ReadThread;
 
+    /// Parent hub to send the data to / read the data from.
     HFlow *hub_;
+    /// StateFlow that is performing the actual writes.
     FdHubWriteFlow<typename HFlow::value_type> writeFlow_;
+    /// An OSThread child that is performing the reads.
     ReadThread readThread_;
 };
 

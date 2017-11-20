@@ -38,36 +38,48 @@
 #include <algorithm>
 
 /// An mostly std::set<> compatible class that stores the internal data in a
-/// sorted vector. Has low memory overhead; isertion cost is pretty high and
+/// sorted vector. Has low memory overhead; insertion cost is pretty high and
 /// lookup cost is logarithmic. Useful when a few insertions happen (for
 /// example only during initialization) and then lots of lookups are made.
 template <class D, class CMP> class SortedListSet
 {
 public:
+    /// Type of data stored in the set.
     typedef D data_type;
 
 private:
+    /// Type that we store data in internally.
     typedef std::vector<data_type> container_type;
 
 public:
+    /// Iterator type.
     typedef typename container_type::iterator iterator;
+    /// Const Iterator type.
     typedef typename container_type::const_iterator const_iterator;
 
     SortedListSet()
     {
     }
 
+    /// @return first iterator.
     iterator begin()
     {
         lazy_init();
         return container_.begin();
     }
 
+    /// @return last iterator.
     iterator end()
     {
         return container_.begin() + sortedCount_;
     }
 
+    /// @return the number of entries in the map.
+    size_t size() {
+        return container_.size();
+    }
+    
+    /// @param key what to search for @return iterator, see std::lower_bound.
     template<class key_type>
     iterator lower_bound(key_type key)
     {
@@ -76,6 +88,7 @@ public:
                                 CMP());
     }
 
+    /// @param key what to search for @return iterator, see std::upper_bound.
     template<class key_type>
     iterator upper_bound(key_type key)
     {
@@ -83,25 +96,46 @@ public:
         return std::upper_bound(container_.begin(), container_.end(), key,
                                 CMP());
     }
-
+    
+    /// Searches for a single entry. @param key is what to search for. @return
+    /// end() if search key was not found; else the first entry that is == key.
     template<class key_type>
-    pair<iterator, iterator> equal_range(key_type key)
+    iterator find(key_type key)
+    {
+        lazy_init();
+        auto lb = lower_bound(key);
+        auto ub = upper_bound(key);
+        if (ub == lb) return end();
+        return lb;
+    }
+    
+    /// @param key what to search for @return iterators, see std::equal_range.
+    template<class key_type>
+    std::pair<iterator, iterator> equal_range(key_type key)
     {
         lazy_init();
         return std::equal_range(container_.begin(), container_.end(), key,
                                 CMP());
     }
 
+    /// Adds new entry to the vector.
     void insert(data_type &&d)
     {
         container_.push_back(d);
     }
 
+    /// Removes an entry from the vector, pointed by an iterator.
     void erase(const iterator &it)
     {
         container_.erase(it);
     }
 
+    /// Removes all entries.
+    void clear() {
+        container_.clear();
+        sortedCount_ = 0;
+    }
+    
 private:
     /// Reestablishes sorted order in case anything was inserted or removed.
     void lazy_init()

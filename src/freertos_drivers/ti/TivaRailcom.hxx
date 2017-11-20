@@ -57,9 +57,11 @@
 #ifndef _FREERTOS_DRIVERS_TI_TIVARAILCOM_HXX_
 #define _FREERTOS_DRIVERS_TI_TIVARAILCOM_HXX_
 
+#if (!defined(TIVADCC_TIVA)) && (!defined(TIVADCC_CC3200))
+#error must define either TIVADCC_TIVA or TIVADCC_CC3200
+#endif
 
 #include "TivaDCC.hxx"  // for FixedQueue
-#include "TivaGPIO.hxx" // for pins
 
 #include "RailcomDriver.hxx"
 #include "dcc/RailCom.hxx"
@@ -121,17 +123,16 @@ __attribute__((weak)) = {SYSCTL_PERIPH_UART4, SYSCTL_PERIPH_UART3, SYSCTL_PERIPH
 
 */
 
-struct Debug;
-
 /// Base class for railcom drivers. Ideally this base class should be
 /// non-specific to the hardwsre or the  TivaWare driver library.
 ///
-/// @TODO(balazs.racz) factor this class out into
+/// @todo(balazs.racz) factor this class out into
 /// freertos_drivers/common/Railcom.hxx.
 template <class HW>
 class RailcomDriverBase : public RailcomDriver, private Node
 {
 public:
+    /// Constructor. @param name is the device node (e.g. "/dev/railcom0").
     RailcomDriverBase(const char *name)
         : Node(name)
         , readableNotifiable_(nullptr)
@@ -177,7 +178,7 @@ private:
         }
     }
 
-    // Notify interface
+    // Asynchronous interface
     int ioctl(File *file, unsigned long int key, unsigned long data) override
     {
         if (IOC_TYPE(key) == CAN_IOC_MAGIC &&
@@ -213,6 +214,8 @@ private:
     }
 
 public:
+    /// Implementation of the interrupt handler running at the kernel interrupt
+    /// priority. Call this function from the hardware interrupt handler.
     void os_interrupt_handler() __attribute__((always_inline))
     {
         if (!feedbackQueue_.empty())
@@ -236,8 +239,8 @@ private:
 protected:
     /** Takes a new empty packet at the front of the queue, fills in feedback
      * key and channel information.
-     *
-     * @returns a packet pointer to write into. If there is no space, returns
+     * @param channel is which channel to set the packet for.
+     * @return a packet pointer to write into. If there is no space, returns
      * nullptr.*/
     dcc::Feedback *alloc_new_packet(uint8_t channel)
     {
@@ -252,7 +255,9 @@ protected:
         return entry;
     }
 
-    // Adds a sample for a preamble bit.
+    /// Adds a sample for a preamble bit. @param sample is the next sample to
+    /// return to the application layer (usually a bitmask setting which
+    /// channels are active).
     void add_sample(uint8_t sample) {
         if (feedbackQueue_.full()) return;
         feedbackQueue_.back().reset(feedbackKey_);
@@ -262,11 +267,12 @@ protected:
         MAP_IntPendSet(HW::OS_INTERRUPT);
     }
 
-    /**< Notify this when we have data in our buffers. */
+    /** Notify this when we have data in our buffers. */
     Notifiable *readableNotifiable_;
     /** The packets we have read so far. */
     FixedQueue<dcc::Feedback, HW::Q_SIZE> feedbackQueue_;
-    uint32_t feedbackKey_; //< Stores the key for the next packets to read.
+    /// Stores the key for the next packets to read.
+    uint32_t feedbackKey_;
     /** Stores pointers to packets we are filling right now, one for each
      * channel. */
     dcc::Feedback *returnedPackets_[HW::CHANNEL_COUNT];
@@ -280,11 +286,13 @@ protected:
 template <class HW> class TivaRailcomDriver : public RailcomDriverBase<HW>
 {
 public:
+    /// Constructor. @param path is the device node path (e.g. "/dev/railcom0").
     TivaRailcomDriver(const char *path) : RailcomDriverBase<HW>(path)
     {
     }
 
 private:
+    /// True when we are currently within a cutout.
     bool inCutout_ = false;
 
     using RailcomDriverBase<HW>::returnedPackets_;
@@ -293,7 +301,11 @@ private:
     {
         for (unsigned i = 0; i < ARRAYSIZE(HW::UART_BASE); ++i)
         {
+#ifdef TIVADCC_TIVA
             MAP_SysCtlPeripheralEnable(HW::UART_PERIPH[i]);
+#elif defined(TIVADCC_CC3200)
+            MAP_PRCMPeripheralClkEnable(HW::UART_PERIPH[i], PRCM_RUN_MODE_CLK);
+#endif            
             MAP_UARTConfigSetExpClk(HW::UART_BASE[i], cm3_cpu_clock_hz, 250000,
                                     UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE |
                                     UART_CONFIG_PAR_NONE);
@@ -322,6 +334,7 @@ private:
     {
         HW::enable_measurement();
         const bool need_ch1_cutout = HW::need_ch1_cutout() || (this->feedbackKey_ < 11000);
+        Debug::RailcomRxActivate::set(true);
         for (unsigned i = 0; i < ARRAYSIZE(HW::UART_BASE); ++i)
         {
             if (need_ch1_cutout)
@@ -407,6 +420,7 @@ private:
                 returnedPackets_[i]->add_ch2_data(data);
             }
             HWREG(HW::UART_BASE[i] + UART_O_CTL) &= ~UART_CTL_RXE;
+            Debug::RailcomRxActivate::set(false);
             //HWREGBITW(HW::UART_BASE[i] + UART_O_CTL, UART_CTL_RXE) = 0;
             if (returnedPackets_[i]) {
                 this->feedbackQueue_.commit_back();

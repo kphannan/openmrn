@@ -74,6 +74,9 @@ enum
     DCC_PROG_WRITE1 = 0b11101100,
     DCC_PROG_READ4 = 0b11100000,
 
+    DCC_BASIC_ACCESSORY_B1 = 0b10000000,
+    DCC_BASIC_ACCESSORY_B2 = 0b10000000,
+    
     // Extended packet: 128-step speed.
     DCC_EXT_SPEED = 0b00111111,
     DCC_EXT_SPEED_FORWARD = 0x80,
@@ -248,6 +251,19 @@ void Packet::add_dcc_pom_write1(unsigned cv_number, uint8_t value) {
     add_dcc_checksum();
 }
 
+void Packet::add_dcc_basic_accessory(unsigned address, bool is_activate) {
+    payload[dlc++] = DCC_BASIC_ACCESSORY_B1 | ((address >> 3) & 0b111111);
+    uint8_t b2 = 1;
+    b2 <<= 3;
+    b2 |= ((~(address >> 9)) & 0b111);
+    b2 <<= 1;
+    b2 |= (is_activate ? 1 : 0);
+    b2 <<= 3;
+    b2 |= address & 0b111;
+    payload[dlc++] = b2;
+    add_dcc_checksum();
+}
+
 void Packet::start_mm_packet()
 {
     dlc = 3;
@@ -263,7 +279,8 @@ static const uint8_t marklin_address[3] = {0b00, 0b11, 0b10};
 static const uint8_t marklin_fn_bits[5] = {0,          0b01010000, 0b00000100,
                                            0b00010100, 0b01010100};
 
-/** Sets the address bits of an MM packet to a specific loco address. */
+/** Sets the address bits of an MM packet to a specific loco address. @param a
+ * is the train address @param light if true, light (f0) will be set to ON. */
 void Packet::add_mm_address(MMAddress a, bool light)
 {
     uint8_t address = a.value;

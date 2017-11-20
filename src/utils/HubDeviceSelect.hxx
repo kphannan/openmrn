@@ -52,16 +52,21 @@ template <class BType> struct SelectBufferInfo
 /// Partial template specialization of buffer traits for string-typed hubs.
 template <> struct SelectBufferInfo<HubFlow::buffer_type>
 {
+    /// Preps a buffer for receiving data. @param b is the buffer to prep.
     static void resize_target(HubFlow::buffer_type *b)
     {
         b->data()->resize(64);
     }
+    /// Clears out all potential empty space left after a buffer has been
+    /// partially filled. @param b is the buffer, @param remaining is how many
+    /// bytes we did not fill.
     static void check_target_size(HubFlow::buffer_type *b, int remaining)
     {
         HASSERT(remaining >= 0);
         HASSERT(remaining <= 64);
         b->data()->resize(64 - remaining);
     }
+    /// @return false because we can deal with a partial read.
     static bool needs_read_fully()
     {
         return false;
@@ -72,15 +77,22 @@ template <> struct SelectBufferInfo<HubFlow::buffer_type>
 template <class T>
 struct SelectBufferInfo<Buffer<HubContainer<StructContainer<T>>>>
 {
+    /// Helper type for declaring the payload buffer type.
     typedef Buffer<HubContainer<StructContainer<T>>> buffer_type;
 
+    /// struct buffers do not need to be resized.
     static void resize_target(buffer_type *b)
     {
     }
+    /// a struct buffer is only okay if the entire buffer was read in in one
+    /// go. @param b is the filled buffer, @param remaining tells how many
+    /// bytes are empty.
     static void check_target_size(buffer_type *b, int remaining)
     {
         HASSERT(remaining == 0);
     }
+    /// @return true because struct buffers always need to be completely read
+    /// before forwarding to lower levels.
     static bool needs_read_fully()
     {
         return true;
@@ -93,15 +105,22 @@ struct SelectBufferInfo<Buffer<HubContainer<StructContainer<T>>>>
 /// inference cannot figure this out.
 template <>
 struct SelectBufferInfo<Buffer<CanHubData>> {
+    /// Helper type for declaring the payload buffer type.
     typedef Buffer<CanHubData> buffer_type;
     
+    /// CAN buffers do not need to be resized.
     static void resize_target(buffer_type *b)
     {
     }
+    /// a CAN buffer is only okay if the entire buffer was read in in one
+    /// go. @param b is the filled buffer, @param remaining tells how many
+    /// bytes are empty.
     static void check_target_size(buffer_type *b, int remaining)
     {
         HASSERT(remaining == 0);
     }
+    /// @return true because CAN buffers always need to be completely read
+    /// before forwarding to lower levels.
     static bool needs_read_fully()
     {
         return true;
@@ -120,34 +139,44 @@ struct SelectBufferInfo<Buffer<CanHubData>> {
 /// structures (such as CAN frame, dcc Packets or dcc Feedback structures) in
 /// the units ofthe size of the structure.
 template <class HFlow>
-class HubDeviceSelect : public Destructable, private Atomic, public Service
+class HubDeviceSelect : public FdHubPortInterface, private Atomic, public Service
 {
 public:
 
 #ifndef __WINNT__
     /// Creates a select-aware hub port for the device specified by `path'.
-    HubDeviceSelect(HFlow *hub, const char *path)
-        : Service(hub->service()->executor())
-        , fd_(::open(path, O_RDWR | O_NONBLOCK))
+    HubDeviceSelect(
+        HFlow *hub, const char *path, Notifiable *on_error = nullptr)
+        : FdHubPortInterface(::open(path, O_RDWR | O_NONBLOCK))
+        , Service(hub->service()->executor())
+        , barrier_(on_error ? on_error : EmptyNotifiable::DefaultInstance())
         , hub_(hub)
         , readFlow_(this)
         , writeFlow_(this)
     {
         HASSERT(fd_ >= 0);
+        barrier_.new_child();
         hub_->register_port(write_port());
     }
 #endif
 
     /// Creates a select-aware hub port for the opened device specified by
     /// `fd'. It can be a hardware device, socket or pipe.
-    HubDeviceSelect(HFlow *hub, int fd)
-        : Service(hub->service()->executor())
-        , fd_(fd)
+    ///
+    /// @param hub the hub to open the port on
+    /// @param fd the filedes to read/write data from/to.
+    /// @param on_error notifiable that will be called when a write or read
+    /// error is encountered.
+    HubDeviceSelect(HFlow *hub, int fd, Notifiable *on_error = nullptr)
+        : FdHubPortInterface(fd)
+        , Service(hub->service()->executor())
+        , barrier_(on_error ? on_error : EmptyNotifiable::DefaultInstance())
         , hub_(hub)
         , readFlow_(this)
         , writeFlow_(this)
     {
         HASSERT(fd_ >= 0);
+        barrier_.new_child();
 #ifdef __WINNT__
         unsigned long par = 1;
         ioctlsocket(fd_, FIONBIO, &par);
@@ -159,27 +188,49 @@ public:
 
     virtual ~HubDeviceSelect()
     {
-        hub_->unregister_port(write_port());
-        executor()->sync_run([this]()
-            {
-                readFlow_.shutdown();
-                writeFlow_.shutdown();
-            });
+        if (fd_ >= 0) {
+            unregister_write_port();
+            int fd = -1;
+            executor()->sync_run([this, &fd]()
+                                 {
+                                     fd = fd_;
+                                     fd_ = -1;
+                                     readFlow_.shutdown();
+                                     writeFlow_.shutdown();
+                                 });
+            ::close(fd);
+            bool completed = false;
+            while (!completed) {
+                executor()->sync_run([this, &completed]()
+                                 {
+                                     if (barrier_.is_done()) completed = true;
+                                 });
+            }
+        }
     }
 
+    /// @return parent hub flow.
     HFlow *hub()
     {
         return hub_;
     }
 
+    /// @return the write flow belonging to this device.
     typename HFlow::port_type *write_port()
     {
         return &writeFlow_;
     }
 
-    int fd()
+    /// Removes the current write port from the registry of the source hub.
+    void unregister_write_port()
     {
-        return fd_;
+        hub_->unregister_port(&writeFlow_);
+        /* We put an empty message at the end of the queue. This will cause
+         * wait until all pending messages are dealt with, and then ping the
+         * barrier notifiable, commencing the shutdown. */
+        auto *b = writeFlow_.alloc();
+        b->set_done(&barrier_);
+        writeFlow_.send(b);
     }
 
 protected:
@@ -187,8 +238,12 @@ protected:
     class ReadFlow : public StateFlowBase
     {
     public:
+        /// Buffer type.
         typedef typename HFlow::buffer_type buffer_type;
 
+        /// Constructor.
+        ///
+        /// @param device parent object.
         ReadFlow(HubDeviceSelect *device)
             : StateFlowBase(device)
             , b_(nullptr)
@@ -196,21 +251,31 @@ protected:
             this->start_flow(STATE(allocate_buffer));
         }
 
+        /// Unregisters the current flow from the hub.
         void shutdown()
         {
-            this->service()->executor()->unselect(&selectHelper_);
+            auto* e = this->service()->executor();
+            if (e->is_selected(&selectHelper_)) {
+                e->unselect(&selectHelper_);
+            }
+            set_terminated();
+            notify_barrier();
         }
 
+        /// @return the parent object.
         HubDeviceSelect *device()
         {
             return static_cast<HubDeviceSelect *>(this->service());
         }
 
+        /// Allocates a new buffer for incoming data. @return next state.
         Action allocate_buffer()
         {
             return this->allocate_and_call(device()->hub(), STATE(try_read));
         }
 
+        /// Attempts to read into the current buffer from the target
+        /// fd. @return next state.
         Action try_read()
         {
             b_ = this->get_allocation_result(device()->hub());
@@ -232,6 +297,14 @@ protected:
 
         Action read_done()
         {
+            if (selectHelper_.hasError_) {
+                /// Error reading the socket.
+                b_->unref();
+                notify_barrier();
+                set_terminated();
+                device()->report_read_error();
+                return exit();
+            }
             SelectBufferInfo<buffer_type>::check_target_size(
                 b_, selectHelper_.remaining_);
             device()->hub()->send(b_, 0);
@@ -240,25 +313,54 @@ protected:
         }
 
     private:
+        /** Calls into the parent flow's barrier notify, but makes sure to
+         * only do this once in the lifetime of *this. */
+        void notify_barrier()
+        {
+            if (barrierOwned_)
+            {
+                barrierOwned_ = false;
+                device()->barrier_.notify();
+            }
+        }
+
+        /// true iff pending parent->barrier_.notify()
+        bool barrierOwned_{true};
+        /// Helper object for read/write FD asynchronously.
         StateFlowSelectHelper selectHelper_{this};
+        /// Buffer that we are currently filling.
         buffer_type *b_;
     };
 
+    /// Base stateflow for the WriteFlow.
     typedef StateFlow<typename HFlow::buffer_type, QList<1>> WriteFlowBase;
     /// State flow implementing select-aware fd writes.
     class WriteFlow : public WriteFlowBase
     {
     public:
+        /// Constructor. @param dev is the parent object.
         WriteFlow(HubDeviceSelect *dev)
             : WriteFlowBase(dev)
         {
         }
 
+        /// Unregisters this oebject from the flows.
         void shutdown()
         {
-            this->service()->executor()->unselect(&selectHelper_);
+            // The fd must be set to negative already to ensure the shutdown
+            // completes successfully.
+            HASSERT(device()->fd() < 0);
+            auto* e = this->service()->executor();
+            if (!selectHelper_.is_empty() && e->is_selected(&selectHelper_)) {
+                e->unselect(&selectHelper_);
+                // will make the internal_try_write exit immediately
+                selectHelper_.remaining_ = 0;
+                // actually wake up the flow
+                this->notify();
+            }
         }
 
+        /// @return parent object.
         HubDeviceSelect *device()
         {
             return static_cast<HubDeviceSelect *>(this->service());
@@ -266,27 +368,64 @@ protected:
 
         StateFlowBase::Action entry() OVERRIDE
         {
+            if (device()->fd() < 0) {
+                return this->release_and_exit();
+            }
             return this->write_repeated(&selectHelper_, device()->fd(),
                 this->message()->data()->data(),
                 this->message()->data()->size(), STATE(write_done),
                 this->priority());
         }
 
+        /// State flow call. @return next state.
         StateFlowBase::Action write_done()
         {
-            HASSERT(!selectHelper_.remaining_);
+            if (selectHelper_.hasError_) {
+                device()->report_write_error();
+            }
             return this->release_and_exit();
         }
 
     private:
+        /// Helper class for asynchronous writes.
         StateFlowBase::StateFlowSelectHelper selectHelper_{this};
     };
 
 protected:
-    /** The device file descriptor. */
-    int fd_;
+    friend class ReadFlow;  // for notifying barrier_
+
+    /** The assumption here is that the write flow still has entries in its
+     * queue that need to be removed. */
+    void report_write_error()
+    {
+        readFlow_.shutdown();
+        unregister_write_port();
+        if (fd_ >= 0) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+    }
+
+    /** Callback from the ReadFlow when the read call has seen an error. The
+     * read count will already have been taken out of the barrier, and the read
+     * flow in terminated state. */
+    void report_read_error()
+    {
+        unregister_write_port();
+        if (fd_ >= 0) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+    }
+
+    /// This notifiable will be called (if not NULL) upon read or write error.
+    BarrierNotifiable barrier_;
+    /// Hub whose data we are trying to send.
     HFlow *hub_;
+    /// StateFlow for reading data from the fd. Woken when data arrives.
     ReadFlow readFlow_;
+    /// StateFlow for writing data to the fd. Woken by data to send or the fd
+    /// being writeable.
     WriteFlow writeFlow_;
 };
 

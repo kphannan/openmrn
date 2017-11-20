@@ -44,6 +44,7 @@
 class Notifiable : public Destructable
 {
 public:
+    /// Generic callback.
     virtual void notify() = 0;
 #ifdef __FreeRTOS__
     virtual void notify_from_isr()
@@ -59,16 +60,20 @@ public:
 class SyncNotifiable : public Notifiable
 {
 public:
+    /// Constructor.
     SyncNotifiable() : sem_(0)
     {
     }
 
+    /// Implementation of notification receive.
     void notify() override
     {
         sem_.post();
     }
 
 #ifdef __FreeRTOS__
+    /// Implementation of notification receive from a FreeRTOS interrupt
+    /// context.
     void notify_from_isr() OVERRIDE
     {
         int woken = 0;
@@ -76,13 +81,14 @@ public:
     }
 #endif
 
-    /* Blocks the current thread until the notification is delivered. */
+    /// Blocks the current thread until the notification is delivered.
     void wait_for_notification()
     {
         sem_.wait();
     }
 
 private:
+    /// Semaphore helping the implementation.
     OSSem sem_;
 
     DISALLOW_COPY_AND_ASSIGN(SyncNotifiable);
@@ -92,10 +98,12 @@ private:
 class EmptyNotifiable : public Notifiable
 {
 public:
+    /// Drops notification to the floor.
     void notify() override
     {
     }
 
+    /// @return a static instance of EmptyNotifiable.
     static Notifiable* DefaultInstance();
 };
 
@@ -129,7 +137,8 @@ public:
     /// point. This function must not be called again until the returned
     /// callback is invoked.
     ///
-    /// @returns a Notifiable to be used as a done callback for some
+    /// @param parent where to proxy notifications to.
+    /// @return a Notifiable to be used as a done callback for some
     /// asynchronous processing.
     Notifiable* NewCallback(Notifiable* parent)
     {
@@ -154,6 +163,8 @@ private:
         p->notify();
     }
 
+    /// Where to proxy notifications. If nullptr, then this was already
+    /// notified and shall not be notified again.
     Notifiable* parent_;
 };
 
@@ -281,7 +292,7 @@ public:
         }
     }
 
-    /* Transfers the ownership of the notification; it will NOT be called in
+    /** Transfers the ownership of the notification; it will NOT be called in
      * the destructor. The caller is now responsible for calling it.
      * @return the notification pointer stored in the constructor. */
     Notifiable* Transfer()
@@ -304,7 +315,7 @@ private:
 ///
 /// Without the variable name the notification gets called immediately (since
 /// the temporary C++ object of type AutoNotifiable gets destructed immediately
-/// when the c++ statement fininshes), thus cuasing subtle concurrency bugs.
+/// when the c++ statement fininshes), thus causing subtle concurrency bugs.
 #define AutoNotify(l) int error_omitted_autonotify_holder_variable[-1]
 
 /** A notifiable class that calls a particular function object once when it is
@@ -312,11 +323,14 @@ private:
 class TempNotifiable : public Notifiable
 {
 public:
+    /// Constructor. @param body is the function object that will be called
+    /// when *this is notified, just before *this is deleted.
     TempNotifiable(std::function<void()> body)
         : body_(std::move(body))
     {
     }
 
+    /// Calls the notification method.
     void notify() OVERRIDE
     {
         body_();
@@ -324,6 +338,7 @@ public:
     }
 
 private:
+    /// Function object (callback) to call.
     std::function<void()> body_;
 };
 

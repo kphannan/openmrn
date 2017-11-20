@@ -16,7 +16,7 @@ endif
 include $(OPENMRNPATH)/etc/prog.mk
 
 
-XLATEDLIBS=nmranet spiffs utils os executor
+XLATEDLIBS=openlcb spiffs utils os executor
 
 ifdef FOOOXXX
 XLATEDSTDLIBS=stdc++ c
@@ -55,13 +55,12 @@ $(eval $(foreach fbase,$(XLATEDSTDLIBS),$(call LIBCOPY_template,$(fbase),$(XTENS
 
 $(eval $(foreach fbase,$(XLATEDGCCLIBS),$(call LIBCOPY_template,$(fbase),$(wildcard $(XTENSAGCCPATH)/lib/gcc/xtensa-lx106-elf/*/lib$(fbase).a))))
 
-$(EXECUTABLE)$(EXTENTION): $(FULLP_XLATEDLIBS) scrape_main_o
+$(EXECUTABLE)$(EXTENTION): $(FULLP_XLATEDLIBS) main.o.stripped
 
-.PHONY: scrape_main_o
-
-scrape_main_o: main.o
+main.o.stripped: main.o
 	$(OBJDUMP) -h $<  | grep [.]text[.] | cut -d . -f 3- | cut -d " " -f 1 | sed 's/.*/--rename-section .text.\0=.irom0.text --rename-section .literal.\0=.irom0.literal/g' > lib/flagfilemaino.lst
 	$(OBJCOPY) @lib/flagfilemaino.lst $<
+	touch $@
 
 
 $(EXECUTABLE)-0x00000.bin: $(EXECUTABLE)$(EXTENTION)
@@ -88,5 +87,5 @@ xflash: $(EXECUTABLE)-bload.bin $(EXECUTABLE).lst
 
 
 rflash: $(EXECUTABLE)-btgt.bin $(EXECUTABLE).lst
-	$(OPENMRNPATH)/applications/bootloader_client/targets/linux.x86/bootloader_client -r -c esp8266 -n 0x0501010114$$(printf %02x $(ADDRESS)) -f $< 
+	$(OPENMRNPATH)/applications/bootloader_client/targets/linux.x86/bootloader_client -r -c esp8266 -w 10 -n 0x0501010114$$(printf %02x $(ADDRESS)) -f $< 
 

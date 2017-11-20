@@ -90,6 +90,16 @@ DECLARE_CONST(serial_tx_buffer_size);
 /** Number of bytes to queue in the serial driver for receive. */
 DECLARE_CONST(serial_rx_buffer_size);
 
+/// Number of pending packets per inbound gridconnect port. There is memory
+/// cost associated with setting this number high. Set to 1'000'000 to make it
+/// infinite.
+DECLARE_CONST(gridconnect_port_max_incoming_packets);
+/// Similar to the above, but:
+///  - allocates all memory upfront. Set to 1 to leave as infinite
+///  - tracks CAN frames coming from gridconnect ports
+/// it works (unlike the above)
+DECLARE_CONST(gridconnect_bridge_max_incoming_packets);
+
 /** Number of bytes of gridconnect data to buffer before sending off the
  * lowlevel system (such as TCP socket). */
 DECLARE_CONST(gridconnect_buffer_size);
@@ -97,6 +107,10 @@ DECLARE_CONST(gridconnect_buffer_size);
 /** How long (in microsec) to buffer generated gridconnect data before sending
  * off to the lowlevel system (such as a TCP socket). */
 DECLARE_CONST(gridconnect_buffer_delay_usec);
+
+/** Whether the GridConnect TCP server should use select (single-threaded) or
+ * two threads per client (multi-threaded) execution model. */
+DECLARE_CONST(gridconnect_tcp_use_select);
 
 /** Number of entries in the remote alias cache */
 DECLARE_CONST(remote_alias_cache_size);

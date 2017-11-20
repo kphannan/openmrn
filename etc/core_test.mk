@@ -34,7 +34,7 @@ $(LIBDIR)/timestamp: $(BUILDDIRS)
 
 $(info test deps $(TESTOBJSEXTRA) $(LIBDIR)/timestamp )
 $(TESTBINS): %.test$(EXTENTION) : %.test.o $(TESTOBJSEXTRA) $(LIBDIR)/timestamp $(TESTEXTRADEPS) | $(BUILDDIRS)
-	$(LD) -o $@ $(LDFLAGS) -los  $< $(TESTOBJSEXTRA) $(LINKCORELIBS) $(SYSLIBRARIES) 
+	$(LD) -o $@ $(LDFLAGS) -los  $< $(TESTOBJSEXTRA) $(STARTGROUP) $(LINKCORELIBS) $(ENDGROUP) $(SYSLIBRARIES) 
 
 -include $(TESTOBJS:.test.o=.dtest)
 -include $(TESTOBJSEXTRA:.o=.d)
@@ -61,7 +61,7 @@ ifndef CUSTOM_EXEC
 # This target actually runs the test. We jump through some hoops to collect the
 # coverage files into a separate directory. Since they are in a separate directory, we need to put the original .gcno files there as well.
 %.testout : %.testmd5
-	$(EMU) $(<:.testmd5=.test$(EXTENTION)) --gtest_death_test_style=threadsafe
+	$(EMU) $(<:.testmd5=.test$(EXTENTION)) --gtest_death_test_style=threadsafe $(TESTARGS)
 	touch $@
 
 endif

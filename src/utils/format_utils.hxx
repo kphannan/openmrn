@@ -35,10 +35,91 @@
 #ifndef _UTILS_FORMAT_UTILS_HXX_
 #define _UTILS_FORMAT_UTILS_HXX_
 
+#include <string>
+
 /** Renders an integer to string, left-justified. @param buffer must be an at
- * least 10 character long array. @param value will be rendered into the
- * buffer. @returns the pointer to the null character at the end of the
- * rendering. */
+ * @param buffer must be an at least 10 character long array.
+ * @param value will be rendered into the buffer.
+ * @returns the pointer to the null character at the end of the rendering.
+ */
 char* integer_to_buffer(int value, char* buffer);
+
+/** Renders an unsigned integer to string, left-justified.
+ * @param buffer must be an at least 10 character long array.
+ * @param value will be rendered into the buffer.
+ * @returns the pointer to the null character at the end of the rendering.
+ */
+char* unsigned_integer_to_buffer(int value, char* buffer);
+
+/** Renders an uint64_t to string, left-justified.
+ * @param buffer must be an at least 21 character long array.
+ * @param value will be rendered into the buffer.
+ * @returns the pointer to the null character at the end of the rendering.
+ */
+char* uint64_integer_to_buffer(uint64_t value, char* buffer);
+
+/** Renders an unsigned integer to string, left-justified.
+ * @param buffer must be an at least 10 character long array.
+ * @param value will be rendered into the buffer.
+ * @returns the pointer to the null character at the end of the rendering.
+ */
+char* unsigned_integer_to_buffer_hex(unsigned int value, char* buffer);
+
+/** Renders an uint64_t to string, left-justified.
+ * @param buffer must be an at least 17 character long array.
+ * @param value will be rendered into the buffer.
+ * @returns the pointer to the null character at the end of the rendering.
+ */
+char* uint64_integer_to_buffer_hex(uint16_t value, char* buffer);
+
+/** Renders an uint64_t to std::string, left-justified.
+ * @param value will be rendered into the buffer.
+ * @param padding number of bytes that the resulting string should be.
+ * @returns the pointer to the null character at the end of the rendering.
+ */
+string uint64_to_string(uint64_t value, unsigned padding = 0);
+
+/** Renders an uint64_t to std::string, left-justified.
+ * @param value will be rendered into the buffer.
+ * @param padding number of bytes that the resulting string should be.
+ * @returns the pointer to the null character at the end of the rendering.
+ */
+string uint64_to_string_hex(uint64_t value, unsigned padding = 0);
+
+/// Formats a MAC address to string. Works both for Ethernet addresses as well
+/// as for OpenLCB node IDs.
+///
+/// @param mac a 6-byte array storing the MAC address. mac[0] will be printed
+/// at the beginning.
+/// @param colons true to print colons, else false to exclude the colon
+/// seperators
+///
+/// @return a string containing a colon-separated hexadecimal printout of the
+/// given MAC address.
+///
+string mac_to_string(uint8_t mac[6], bool colons = true);
+
+/// Formats an IPv4 address to string.
+///
+/// @param ip a 4-byte array storing the IPv4 address. ip[3] will be printed
+/// at the beginning.
+///
+/// @return a string containing a dot-separated printout of the
+/// given IPv4 address.
+///
+string ipv4_to_string(uint8_t ip[4]);
+
+/// Formats an IPv4 address to string.
+///
+/// @param ip a uint32_t storing the IPv4 address. most significant bytes
+/// will be printed at the beginning.
+///
+/// @return a string containing a dot-separated printout of the
+/// given IPv4 address.
+///
+inline string ipv4_to_string(uint32_t ip)
+{
+    return ipv4_to_string((uint8_t*)&ip);
+}
 
 #endif // _UTILS_FORMAT_UTILS_HXX_

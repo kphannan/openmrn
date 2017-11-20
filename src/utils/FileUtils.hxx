@@ -35,6 +35,8 @@
 #ifndef _UTILS_FILEUTILS_HXX_
 #define _UTILS_FILEUTILS_HXX_
 
+#include <string>
+
 #ifdef __EMSCRIPTEN__
 
 #include <emscripten.h>
@@ -53,6 +55,7 @@ string read_file_to_string(const string &filename)
 #else
 
 #include <stdio.h>
+#include <string.h>
 
 /// Opens a file, reads the entire contents, stores it in a c++ std::string and
 /// returns this string. Helper function in some client applications. Exits the
@@ -98,7 +101,7 @@ void write_string_to_file(const string &filename, const string &data)
         exit(1);
     }
     size_t nr;
-    size_t offset;
+    size_t offset = 0;
     string ret;
     while ((nr = fwrite(data.data() + offset, 1, data.size() - offset, f)) > 0)
     {

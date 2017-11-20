@@ -58,7 +58,7 @@ class Pool;
 template <class T> class Buffer;
 class BufferBase;
 
-namespace nmranet
+namespace openlcb
 {
 class AsyncIfTest;
 }
@@ -171,7 +171,7 @@ protected:
         }
     }
 
-    friend class nmranet::AsyncIfTest;
+    friend class openlcb::AsyncIfTest;
 
     /** Allow Pool access to our constructor */
     friend class Pool;
@@ -253,6 +253,21 @@ template<typename T> using AutoReleaseBuffer = std::unique_ptr<Buffer<T>, Buffer
  * when going out of scope. */
 template<typename T> using BufferPtr = AutoReleaseBuffer<T>;
 
+/// Helper function to create a BufferPtr of an appropriate type without having
+/// to explicitly specify the template argument. Example usage:
+/// Action foo() { // after an allocate_and_call(barFlow_, STATE(foo));
+///   auto b = get_buffer_deleter(get_allocation_result(barFlow_));
+///   ... // maybe return call_immediately(throw_error);
+///   b->data()->qux = 13;  // use b regularly as if it was a pointer.
+///   barFlow_->send(b.transfer());
+/// }
+///
+/// @param b is the typed raw buffer pointer.
+/// @return a buffer deleter object of the respective type.
+template<typename T> BufferPtr<T> get_buffer_deleter(Buffer<T>* b) {
+    return BufferPtr<T>(b);
+}
+
 /** Pool of previously allocated, but currently unused, items. */
 class Pool
 {
@@ -325,6 +340,11 @@ protected:
     {
     }
 
+    /// Untyped buffer allocation method, used be descendants. @param size
+    /// isthe number of bytes the buffer should have as payload. @param flow is
+    /// non-null, then asynchronous allocation is performed and the flow is
+    /// called with the new buffer when it is available. @return the new buffer
+    /// or nullptr if out of RAM and async allocation was allowed.
     virtual BufferBase *alloc_untyped(size_t size, Executable *flow) = 0;
 
     /** Release an item back to the free pool.
@@ -598,15 +618,17 @@ protected:
 
 private:
     /** Get a free item out of the pool.
-     * @param result pointer to a pointer to the result
+     * @param size the number of bytes of the buffer payload that we need to
+     * allocate.
      * @param flow if !NULL, then the alloc call is considered async and will
      *        behave as if @ref alloc_async() was called.
+     * @return newly allocated buffer or nullptr if there was no buffer on the
+     * empty queue to allocate.
      */
     BufferBase *alloc_untyped(size_t size, Executable *flow) override;
 
     /** Release an item back to the free pool.
      * @param item pointer to item to release
-     * @param size size of buffer to free
      */
     void free(BufferBase *item) override;
 

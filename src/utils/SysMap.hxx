@@ -64,9 +64,11 @@ public:
         : entries(entries),
           used(0),
           freeList(NULL),
-          nodes(new Node[entries])
+          nodes(NULL)
     {
-        HASSERT(entries != 0);
+        if (entries) {
+            nodes = new Node[entries];
+        }
         clear();
     }
 
@@ -89,6 +91,7 @@ private:
     struct Node
     {
     public:
+        /// Pointer structure for the tree.
         RB_ENTRY(Node) entry;
         union
         {

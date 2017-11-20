@@ -1,10 +1,10 @@
 include $(OPENMRNPATH)/etc/path.mk
 
 ifndef TARGET
-TARGET := $(shell basename `cd ../; pwd`)
+TARGET := $(notdir $(realpath $(CURDIR)/..))
 export TARGET
 endif
-BASENAME := $(shell basename `pwd`)
+BASENAME := $(notdir $(CURDIR))
 
 ifdef PARENTDIR
 LIBBASENAME := $(PARENTLIB)_$(BASENAME)
@@ -17,7 +17,10 @@ endif
 SRCDIR := $(OPENMRNPATH)/src/$(REL_DIR)
 TGTDIR := $(OPENMRNPATH)/targets/$(TARGET)/$(REL_DIR)
 
+ifndef VPATH
 VPATH = $(SRCDIR)
+endif
+
 export PARENTDIR := $(REL_DIR)
 export PARENTLIB := $(LIBBASENAME)
 
@@ -59,14 +62,11 @@ MISSING_DEPS:=$(call find_missing_deps,$(DEPS))
 ifneq ($(MISSING_DEPS),)
 
 all docs clean veryclean tests mksubdirs:
-	@echo "******************************************************************"
-	@echo "*"
-	@echo "*   Unable to build for $(TARGET)/$(REL_DIR), missing dependencies: $(MISSING_DEPS)"
-	@echo "*"
-	@echo "******************************************************************"
+	@echo "** Ignoring target $(TARGET), because the following libraries are not installed: $(MISSING_DEPS). This is not an error, so please do not report as a bug. If you care about target $(TARGET), make sure the quoted libraries are installed. For most libraries you can check $(OPENMRNPATH)/etc/path.mk to see where we looked for these dependencies."
 
 else
 .PHONY: all
+
 all: $(LIBNAME)
 
 ifneq ($(SUBDIRS),)
@@ -96,12 +96,16 @@ $(ARM_OBJS): %.o : %.c
 
 $(LIBNAME): $(OBJS)
 	$(AR) crs$(AROPTS) $(LIBNAME) $(OBJS)
+ifeq ($(OS),Windows_NT)
+	cp -f $(TGTDIR)/$(LIBNAME) $(OPENMRNPATH)/targets/$(TARGET)/lib
+else
 	ln -sf $(TGTDIR)/$(LIBNAME) $(OPENMRNPATH)/targets/$(TARGET)/lib
+endif
 	touch $(OPENMRNPATH)/targets/$(TARGET)/lib/timestamp
 
 .PHONY: clean
 clean:
-	rm -rf *.o *.d *.a *.so *.dll *.otest *.dtest *.test *.gcda *.map *.gcno *.md5
+	rm -rf $(wildcard *.o *.d *.a *.so *.dll *.otest *.dtest *.test *.gcda *.map *.gcno *.md5 *.stripped)
 
 .PHONY: veryclean
 veryclean: clean

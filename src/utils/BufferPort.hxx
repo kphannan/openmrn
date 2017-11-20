@@ -67,9 +67,20 @@ public:
 
     ~BufferPort()
     {
-        delete sendBuf_;
+        delete [] sendBuf_;
     }
 
+    bool shutdown() {
+        flush_buffer();
+        if (timerPending_) {
+            return false;
+        }
+        if (!is_waiting()) {
+            return false;
+        }
+        return true;
+    }
+    
 private:
     Action entry() override
     {
@@ -118,6 +129,10 @@ private:
         tgtBuf_ = nullptr;
         b->data()->assign(sendBuf_, bufEnd_);
         bufEnd_ = 0;
+        if (message())
+        {
+            b->set_done(message()->new_child());
+        }
         downstream_->send(b);
     }
 

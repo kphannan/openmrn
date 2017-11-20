@@ -49,13 +49,13 @@
 #include "executor/Executor.hxx"
 #include "executor/Service.hxx"
 
-#include "nmranet/IfCan.hxx"
-#include "nmranet/DatagramCan.hxx"
-#include "nmranet/BootloaderClient.hxx"
-#include "nmranet/If.hxx"
-#include "nmranet/AliasAllocator.hxx"
-#include "nmranet/DefaultNode.hxx"
-#include "nmranet/NodeInitializeFlow.hxx"
+#include "openlcb/IfCan.hxx"
+#include "openlcb/DatagramCan.hxx"
+#include "openlcb/BootloaderClient.hxx"
+#include "openlcb/If.hxx"
+#include "openlcb/AliasAllocator.hxx"
+#include "openlcb/DefaultNode.hxx"
+#include "openlcb/NodeInitializeFlow.hxx"
 #include "utils/socket_listener.hxx"
 
 #include "freertos/bootloader_hal.h"
@@ -65,37 +65,41 @@ Executor<1> g_executor(nt);
 Service g_service(&g_executor);
 CanHubFlow can_hub0(&g_service);
 
-static const nmranet::NodeID NODE_ID = 0x05010101181FULL;
+static const openlcb::NodeID NODE_ID = 0x05010101181FULL;
 
-nmranet::IfCan g_if_can(&g_executor, &can_hub0, 3, 3, 2);
-nmranet::InitializeFlow g_init_flow{&g_service};
-nmranet::CanDatagramService g_datagram_can(&g_if_can, 10, 2);
-static nmranet::AddAliasAllocator g_alias_allocator(NODE_ID, &g_if_can);
-nmranet::DefaultNode g_node(&g_if_can, NODE_ID);
+openlcb::IfCan g_if_can(&g_executor, &can_hub0, 3, 3, 2);
+openlcb::InitializeFlow g_init_flow{&g_service};
+openlcb::CanDatagramService g_datagram_can(&g_if_can, 10, 2);
+static openlcb::AddAliasAllocator g_alias_allocator(NODE_ID, &g_if_can);
+openlcb::DefaultNode g_node(&g_if_can, NODE_ID);
 
-namespace nmranet
+namespace openlcb
 {
 Pool *const g_incoming_datagram_allocator = mainBufferPool;
+extern long long DATAGRAM_RESPONSE_TIMEOUT_NSEC;
 }
 
 int port = 12021;
 const char *host = "localhost";
 const char *device_path = nullptr;
 const char *filename = nullptr;
+const char *dump_filename = nullptr;
 uint64_t destination_nodeid = 0;
 uint64_t destination_alias = 0;
-int memory_space_id = nmranet::MemoryConfigDefs::SPACE_FIRMWARE;
+int memory_space_id = openlcb::MemoryConfigDefs::SPACE_FIRMWARE;
 const char *checksum_algorithm = nullptr;
 bool request_reboot = false;
 bool request_reboot_after = true;
 bool skip_pip = false;
+long long stream_timeout_nsec = 3000;
 
 void usage(const char *e)
 {
     fprintf(stderr,
         "Usage: %s ([-i destination_host] [-p port] | [-d device_path]) [-s "
-        "memory_space_id] [-c csum_algo] [-r] [-t] [-x] (-n nodeid | -a "
-        "alias) -f filename\n",
+        "memory_space_id] [-c csum_algo] [-r] [-t] [-x] [-w dg_timeout] [-W "
+        "stream_timeout] [-D dump_filename] (-n nodeid | -a alias) -f "
+        "filename\n",
         e);
     fprintf(stderr, "Connects to an openlcb bus and performs the "
                     "bootloader protocol on openlcb node with id nodeid with "
@@ -121,13 +125,16 @@ void usage(const char *e)
     fprintf(stderr, "Unless -t is specified the target will be rebooted after "
                     "flashing complete.\n");
     fprintf(stderr, "-x skips the PIP request and uses streams.\n");
+    fprintf(stderr,
+        "-w dg_timeout sets how many seconds to wait for a datagram reply.\n");
+    fprintf(stderr, "-D filename  writes the checksummed payload to the given file.\n");
     exit(1);
 }
 
 void parse_args(int argc, char *argv[])
 {
     int opt;
-    while ((opt = getopt(argc, argv, "hp:i:rtd:n:a:s:f:c:x")) >= 0)
+    while ((opt = getopt(argc, argv, "hp:i:rtd:n:a:s:f:c:xw:W:D:")) >= 0)
     {
         switch (opt)
         {
@@ -146,6 +153,9 @@ void parse_args(int argc, char *argv[])
             case 'f':
                 filename = optarg;
                 break;
+            case 'D':
+                dump_filename = optarg;
+                break;
             case 'n':
                 destination_nodeid = strtoll(optarg, nullptr, 16);
                 break;
@@ -154,6 +164,12 @@ void parse_args(int argc, char *argv[])
                 break;
             case 's':
                 memory_space_id = strtol(optarg, nullptr, 16);
+                break;
+            case 'w':
+                openlcb::DATAGRAM_RESPONSE_TIMEOUT_NSEC = SEC_TO_NSEC(strtoul(optarg, nullptr, 10));
+                break;
+            case 'W':
+                openlcb::g_bootloader_timeout_sec = atoi(optarg);
                 break;
             case 'c':
                 checksum_algorithm = optarg;
@@ -172,15 +188,15 @@ void parse_args(int argc, char *argv[])
                 usage(argv[0]);
         }
     }
-    if (!filename || (!destination_nodeid && !destination_alias))
+    if (!filename || (!destination_nodeid && !destination_alias && !dump_filename))
     {
         usage(argv[0]);
     }
 }
 
-nmranet::BootloaderClient bootloader_client(
+openlcb::BootloaderClient bootloader_client(
     &g_node, &g_datagram_can, &g_if_can);
-nmranet::BootloaderResponse response;
+openlcb::BootloaderResponse response;
 
 void maybe_checksum(string *firmware)
 {
@@ -221,6 +237,38 @@ void maybe_checksum(string *firmware)
             exit(1);
         }
     }
+    else if (algo == "cc3200")
+    {
+        struct app_header hdr;
+        memset(&hdr, 0, sizeof(hdr));
+        // magic constant that comes from the size of the interrupt table. The
+        // actual target has this in memory_map.ld.
+        uint32_t offset = 0x270;
+        if (firmware->size() < offset + sizeof(hdr))
+        {
+            fprintf(stderr, "Failed to checksum: firmware too small.\n");
+            exit(1);
+        }
+        if (memcmp(&hdr, &(*firmware)[offset], sizeof(hdr)))
+        {
+            fprintf(stderr,
+                "Failed to checksum: location of checksum is not empty.\n");
+            exit(1);
+        }
+        hdr.app_size = firmware->size();
+        crc3_crc16_ibm(
+            firmware->data(), offset, (uint16_t *)hdr.checksum_pre);
+        hdr.checksum_pre[2] = 0x73a92bd1;
+        hdr.checksum_pre[3] = 0x5a5a55aa;
+        crc3_crc16_ibm(&(*firmware)[offset + sizeof(hdr)],
+            (firmware->size() - offset - sizeof(hdr)) & ~3,
+            (uint16_t *)hdr.checksum_post);
+        hdr.checksum_post[2] = 0x73a92bd1;
+        hdr.checksum_post[3] = 0x5a5a55aa;
+
+        memcpy(&(*firmware)[offset], &hdr, sizeof(hdr));
+        printf("Checksummed firmware with algorithm cc3200\n");
+    }
     else if (algo == "esp8266")
     {
         struct app_header hdr;
@@ -247,7 +295,7 @@ void maybe_checksum(string *firmware)
     else
     {
         fprintf(stderr, "Unknown checksumming algo %s. Known algorithms are: "
-                        "tiva123, esp8266.\n",
+                        "tiva123, cc3200, esp8266.\n",
             checksum_algorithm);
         exit(1);
     }
@@ -282,7 +330,7 @@ int appl_main(int argc, char *argv[])
 
     SyncNotifiable n;
     BarrierNotifiable bn(&n);
-    Buffer<nmranet::BootloaderRequest> *b;
+    Buffer<openlcb::BootloaderRequest> *b;
     mainBufferPool->alloc(&b);
 
     b->set_done(&bn);
@@ -301,6 +349,11 @@ int appl_main(int argc, char *argv[])
         b->data()->data.size(), filename, memory_space_id);
     maybe_checksum(&b->data()->data);
 
+    if (dump_filename) {
+        write_string_to_file(dump_filename, b->data()->data);
+        exit(0);
+    }
+    
     bootloader_client.send(b);
     n.wait_for_notification();
     printf("Result: %04x  %s\n", response.error_code,

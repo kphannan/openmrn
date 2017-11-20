@@ -80,6 +80,8 @@ static constexpr unsigned blocks_per_sector = EEPROMEmulation::SECTOR_SIZE / EEP
 class MyEEPROM : public EEPROMEmulation
 {
 public:
+    /// Contructor. @param file_size how many bytes @param clear if true, the
+    /// EEPROM will be initialized with all 0xFF bytes.
     MyEEPROM(size_t file_size, bool clear = true)
         : EEPROMEmulation(FILENAME, file_size)
     {
@@ -89,36 +91,37 @@ public:
         }
         mount();
 
-        LOG(INFO, "sector count %d", sector_count());
-        LOG(INFO, "slot count %d", slot_count());
-        LOG(INFO, "active index %d", activeIndex);
+        LOG(INFO, "sector count %d, active index %d, slot count %d, available count %d", sector_count(), activeSector_, slot_count(), avail());
     }
 
+    /// @return how many blocks are available in the current sector.
     unsigned avail() {
-        return available;
+        return availableSlots_;
     }
 
 private:
-    void flash_erase(void *address) override {
-        ASSERT_LE((void*)&foo::__eeprom_start[0], address);
-        ASSERT_GT((void*)&foo::__eeprom_start[EELEN], address);
-        ASSERT_EQ(0, (((uint8_t*)address) - foo::__eeprom_start)  % EEPROMEmulation::SECTOR_SIZE);
-        memset(address, 0xff, EEPROMEmulation::SECTOR_SIZE);
+    void flash_erase(unsigned sector) override {
+        ASSERT_LE(0, sector);
+        ASSERT_GT(EELEN / SECTOR_SIZE, sector);
+        void* address = &foo::__eeprom_start[sector * SECTOR_SIZE];
+        memset(address, 0xff, SECTOR_SIZE);
     }
 
-    void flash_program(uint32_t *data, void *address, uint32_t count) override {
-        ASSERT_LE((void*)&__eeprom_start, address);
-        ASSERT_GE((void*)(&foo::__eeprom_start[EELEN]), address);
-        memcpy(address, data, count);
+    void flash_program(unsigned sector, unsigned block, uint32_t *data, uint32_t byte_count) override {
+        ASSERT_LE(0, sector);
+        ASSERT_GT(EELEN / SECTOR_SIZE, sector);
+        ASSERT_LE(0, block);
+        ASSERT_GT(SECTOR_SIZE/BLOCK_SIZE, block);
+        ASSERT_EQ(0, byte_count % BLOCK_SIZE);
+        uint8_t* address = &foo::__eeprom_start[sector * SECTOR_SIZE + block * BLOCK_SIZE];
+        memcpy(address, data, byte_count);
     }
 
-    int address_to_sector(const void *address) override {
-        uint8_t* a = (uint8_t*)address;
-        return (a - &foo::__eeprom_start[0]) / SECTOR_SIZE;
-    }
-
-    uint32_t *sector_to_address(const int sector) override {
-        return (uint32_t*) &(foo::__eeprom_start[sector * SECTOR_SIZE]);
+    const uint32_t* block(unsigned sector, unsigned index) override {
+        EXPECT_GT(EELEN / SECTOR_SIZE, sector);
+        EXPECT_GT(SECTOR_SIZE / BLOCK_SIZE, index);
+        void* address = &foo::__eeprom_start[sector * SECTOR_SIZE + index * BLOCK_SIZE];
+        return (uint32_t*) address;
     }
 };
 
@@ -182,7 +185,8 @@ protected:
     }
 
     /** @return the address (that is, the file offset) of the payload stored in
-     * a given block. */
+     * a given block. @param block_number is the index of the block in question
+     * (0.. block count - 1).*/
     uint32_t block_address(unsigned block_number) {
         uint32_t* address = (uint32_t*)&foo::__eeprom_start[block_number * EEBLOCKSIZE];
         return ((*address) >> 16) * (EEBLOCKSIZE / 2);
@@ -199,11 +203,10 @@ protected:
 
 TEST_F(EepromTest, create) {
     create();
-    EXPECT_EQ(0, e->activeIndex);
+    EXPECT_EQ(0, e->activeSector_);
     EXPECT_EQ(8, e->sector_count());
-    EXPECT_EQ(0, e->address_to_sector(&__eeprom_start));
-    EXPECT_EQ((uint32_t*)&__eeprom_start, e->sector(0));
-    EXPECT_EQ((uint32_t*)&foo::__eeprom_start[4*1024], e->sector(1));
+    EXPECT_EQ((uint32_t*)&__eeprom_start, e->block(0, 0));
+    EXPECT_EQ((uint32_t*)&foo::__eeprom_start[4*1024], e->block(1, 0));
 }
 
 TEST_F(EepromTest, readwrite) {
@@ -231,6 +234,19 @@ TEST_F(EepromTest, readwrite) {
     EXPECT_AT(12, "kqbcd\xFF");
 }
 
+TEST_F(EepromTest, readwrite_recreate) {
+    create();
+    // Reboot MCU after creating empty.
+    create(false);
+
+    write_to(13, "abcd");
+    EXPECT_AT(13, "abcd");
+
+    // Reboot MCU
+    create(false);
+    EXPECT_AT(13, "abcd");
+}
+
 TEST_F(EepromTest, smalloverflow) {
     create();
     write_to(13, "abcd");
@@ -239,7 +255,7 @@ TEST_F(EepromTest, smalloverflow) {
     EXPECT_SLOT(4, 14, "bc");
     EXPECT_SLOT(5, 16, "d\xFF");
     overflow_block();
-    EXPECT_EQ(e->sector(1), e->active());
+    EXPECT_EQ(1, e->activeSector_);
     EXPECT_SLOT(3, 12, "\xFF""a");
     EXPECT_SLOT(4, 14, "bc");
     EXPECT_SLOT(5, 16, "d\xFF");
@@ -252,6 +268,10 @@ TEST_F(EepromTest, smalloverflow) {
     EXPECT_AT(13, "abcd");
     overflow_block();
     EXPECT_AT(13, "abcd");
+    EXPECT_EQ(3, e->activeSector_);
+    create(false);
+    EXPECT_AT(13, "abcd");
+    EXPECT_EQ(3, e->activeSector_);
 }
 
 TEST_F(EepromTest, many_overflow) {
@@ -264,4 +284,8 @@ TEST_F(EepromTest, many_overflow) {
         overflow_block();
     }
     EXPECT_AT(13, "abcd");
+    unsigned s = e->activeSector_;
+    create(false);
+    EXPECT_AT(13, "abcd");
+    EXPECT_EQ(s, e->activeSector_);
 }

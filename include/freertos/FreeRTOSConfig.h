@@ -73,6 +73,7 @@
 #include "utils/blinker.h"
 #endif
 
+
 /*-----------------------------------------------------------
  * Application specific definitions.
  *
@@ -98,8 +99,19 @@
 #define configKERNEL_INTERRUPT_PRIORITY         255
 /* !!!! configMAX_SYSCALL_INTERRUPT_PRIORITY must not be set to zero !!!!
 See http://www.FreeRTOS.org/RTOS-Cortex-M3-M4.html. */
-#define configMAX_SYSCALL_INTERRUPT_PRIORITY     191 /* equivalent to 0xa0, or priority 5. */
+#define configMAX_SYSCALL_INTERRUPT_PRIORITY     0xa0 /* equivalent to 191, or priority 5. */
 
+// change #if to 1 in order to enable asserts for the kernel
+#if 1
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern int g_death_lineno;
+#ifdef __cplusplus
+}
+#endif  // cplusplus
+#define configASSERT( x ) do { if (!(x)) { g_death_lineno = __LINE__; diewith(BLINK_DIE_ASSERT); }} while(0)
+#endif
 
 /// @todo(balazs.racz) i implemented diewith for the launchpad ek-xxx, so this is not needed anymore.
 //#define diewith( x ) abort()
@@ -232,14 +244,18 @@ standard names - or at least those used in the unmodified vector table. */
 #define xPortPendSVHandler PendSV_Handler
 #define xPortSysTickHandler SysTick_Handler
 
-#elif TARGET_PIC32MX
+#elif defined(TARGET_PIC32MX)
 
-#define configCPU_CLOCK_HZ             ( ( unsigned long ) 80000000 )
-#define configMINIMAL_STACK_SIZE       ( ( unsigned short ) 190 )
-#define configTOTAL_HEAP_SIZE          ( ( size_t ) ( 32000 ) )
-#define configTIMER_TASK_STACK_DEPTH   1500
-#define configISR_STACK_SIZE					( 400 )
-#define configPERIPHERAL_CLOCK_HZ      ( ( unsigned long ) configCPU_CLOCK_HZ/2 )
+#define MIPSNO16 __attribute__((nomips16))
+
+#define configCPU_CLOCK_HZ             ( pic32_cpu_clock_hz )
+#define configPERIPHERAL_CLOCK_HZ      ( pic32_periph_clock_hz )
+#define configMINIMAL_STACK_SIZE       ( 90 )
+#define configISR_STACK_SIZE           ( 120 )
+#define configTOTAL_HEAP_SIZE          ( ( size_t ) 9000 )
+#define configTIMER_TASK_STACK_DEPTH   ( 190 )
+#define configUSE_PORT_OPTIMISED_TASK_SELECTION 0
+#define configCHECK_FOR_STACK_OVERFLOW 3
 
 /* The priority at which the tick interrupt runs.  This should probably be
 kept at 1. */
@@ -255,6 +271,8 @@ interrupts. */
 #ifdef __cplusplus
 extern "C" {
 #endif
+extern const unsigned long pic32_cpu_clock_hz;
+extern const unsigned long pic32_periph_clock_hz;
 extern void diewith(unsigned long);
 extern unsigned long blinker_pattern;
 #ifdef __cplusplus
@@ -269,9 +287,8 @@ extern unsigned long blinker_pattern;
 
 #endif // Switch target
 
-
 /* ***************************************************************************
- * Common defines used foer all targets
+ * Common defines used for all targets
  *************************************************************************** */
 #define configTICK_RATE_HZ             ( ( portTickType ) 953 )
 #define NSEC_TO_TICK_SHIFT             20
@@ -287,7 +304,9 @@ extern unsigned long blinker_pattern;
 #define configUSE_RECURSIVE_MUTEXES    1
 #define configUSE_COUNTING_SEMAPHORES  1
 #define configUSE_CO_ROUTINES          0
+#ifndef configCHECK_FOR_STACK_OVERFLOW
 #define configCHECK_FOR_STACK_OVERFLOW 2
+#endif
 
 #define configMAX_PRIORITIES        ( 5 )
 #define configMAX_CO_ROUTINE_PRIORITIES ( 2 )
@@ -299,13 +318,23 @@ extern unsigned long blinker_pattern;
 #define configTIMER_TASK_PRIORITY      (configMAX_PRIORITIES - 1)
 #define INCLUDE_xTimerGetTimerDaemonTaskHandle 1
 
+#if tskKERNEL_VERSION_MAJOR >= 9
+#define configSUPPORT_STATIC_ALLOCATION     1
+#define configSUPPORT_DYNAMIC_ALLOCATION    1
+#endif
+
+/* backwards compatibility */
+#if !defined(vPortClearInterruptMask)
+    #define vPortClearInterruptMask(x)      vPortSetBASEPRI(x)
+#endif
+
 #define INCLUDE_uxTaskGetStackHighWaterMark 1
 #define INCLUDE_pcTaskGetTaskName 1
 
 /* Set the following definitions to 1 to include the API function, or zero
 to exclude the API function. */
 
-#define INCLUDE_vTaskPrioritySet        0
+#define INCLUDE_vTaskPrioritySet        1
 #define INCLUDE_uxTaskPriorityGet       1
 #define INCLUDE_vTaskDelete             1
 #define INCLUDE_vTaskCleanUpResources   1
@@ -343,6 +372,8 @@ void cpuload_tick(void);
 
 #endif
 
-
+#ifndef MIPSNO16
+#define MIPSNO16
+#endif
 
 #endif /* FREERTOS_CONFIG_H */

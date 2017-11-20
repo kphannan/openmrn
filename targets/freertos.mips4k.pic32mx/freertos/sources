@@ -1,7 +1,8 @@
 VPATH := $(FREERTOSPATH)/Source: \
          $(FREERTOSPATH)/Source/portable/MPLAB/PIC32MX: \
          $(FREERTOSPATH)/Source/portable/MemMang/
-         
+
+
 CSRCS += croutine.c \
          list.c \
          queue.c \
@@ -11,7 +12,12 @@ CSRCS += croutine.c \
          event_groups.c \
          heap_3.c
 
+port.o queue.o tasks.o croutine.o timers.o event_groups.o: ARCH = -mips32r2 -minterlink-compressed
+
+
 CXXSRCS +=
 
+# Bug in port.c causes compile error because string.h is not #included
+CFLAGS += -include string.h
 
 ASMSRCS += port_asm.S

@@ -56,7 +56,22 @@ using std::pair;
 #define EXPECT_DEATH(x...) 
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern int g_death_lineno;
+extern const char* g_death_file;
+#ifdef __cplusplus
+}
+#endif
+
 #if defined(__FreeRTOS__)
+
+#ifdef RECORD_DEATH_FILE
+#define RECORD_DEATH() do { g_death_file = __FILE__ ; g_death_lineno = __LINE__; } while(0)
+#else
+#define RECORD_DEATH() do { g_death_lineno = __LINE__; } while(0)
+#endif
 
 /**
    Hard assertion facility. These checks will remain in production code, and
@@ -66,7 +81,7 @@ using std::pair;
    An example would be to check a pointer being not-NULL before dereferencing
    it. The resulting fault is typically much harder to debug than an assert.
  */
-#define HASSERT(x) do { if (!(x)) abort(); } while(0)
+#define HASSERT(x) do { if (!(x)) { RECORD_DEATH(); abort(); } } while(0)
 
 
 #define DIE(MSG) abort()
@@ -76,7 +91,7 @@ using std::pair;
 
 #include <stdio.h>
 
-#define HASSERT(x) do { if (!(x)) { printf("Assertion failed in file " __FILE__ " line %d: assert(%s)", __LINE__, #x); abort();} } while(0)
+#define HASSERT(x) do { if (!(x)) { printf("Assertion failed in file " __FILE__ " line %d: assert(%s)", __LINE__, #x); g_death_file = __FILE__; g_death_lineno = __LINE__; abort();} } while(0)
 
 #define DIE(MSG) do { printf("Crashed in file " __FILE__ " line %d: " MSG, __LINE__); abort(); } while(0)
 
@@ -86,7 +101,7 @@ using std::pair;
 #include <stdio.h>
 
 #ifdef NDEBUG
-#define HASSERT(x) do { if (!(x)) { fprintf(stderr, "Assertion failed in file " __FILE__ " line %d: assert(" #x ")", __LINE__); abort();} } while(0)
+#define HASSERT(x) do { if (!(x)) { fprintf(stderr, "Assertion failed in file " __FILE__ " line %d: assert(" #x ")", __LINE__); g_death_file = __FILE__; g_death_lineno = __LINE__; abort();} } while(0)
 #else
 /// Checks that the value of expression x is true, else terminates the current
 /// process.
@@ -96,7 +111,7 @@ using std::pair;
 
 /// Unconditionally terminates the current process with a message.
 /// @param MSG is the message to print as cause of death.
-#define DIE(MSG) do { fprintf(stderr, "Crashed in file " __FILE__ " line %d: " MSG, __LINE__); abort(); } while(0)
+#define DIE(MSG) do { fprintf(stderr, "Crashed in file " __FILE__ " line %d: " MSG, __LINE__); g_death_file = __FILE__; g_death_lineno = __LINE__; abort(); } while(0)
 
 #endif
 
@@ -168,7 +183,7 @@ using std::pair;
 /// Static (aka compile-time) assertion for C implementation files. For C++ use
 /// the language's builtin static_assert functionality.
 #define C_STATIC_ASSERT(expr, name) \
-    typedef unsigned char __static_assert_##name[expr ? 0 : -1];
+    typedef unsigned char __attribute__((unused)) __static_assert_##name[expr ? 0 : -1]
 
 #ifndef ESP_NONOS
 /// Declares (on the ESP8266) that the current function is not executed too
@@ -178,6 +193,33 @@ using std::pair;
 /// often and should be placed in the instruction RAM.
 #define ICACHE_RAM_ATTR
 #endif
+
+#if defined (__linux__) || defined (__MACH__) || defined (GCC_ARMCM3)
+#define HAVE_BSDSOCKET
+#endif
+
+
+/// Retrieve a parent pointer from a member class variable. UNSAFE.
+/// Usage:
+/// class Parent {
+///   ...
+///   class Inner {
+///     void dosth() {
+///       Parent* p = GET_PARENT_PTR(Parent, innerVar_);
+///       p->call();
+///     }
+///   } innerVar_;
+/// };
+#define GET_PARENT_PTR(ParentClass, variable)                                  \
+    reinterpret_cast<ParentClass *>(                                           \
+        reinterpret_cast<char *>(this) - offsetof(ParentClass, variable));
+
+
+/// Helper macro for printing a node ID on printf that does not support %llx.
+#define FAKELLP(x)  static_cast<unsigned>((x) >> 32), static_cast<unsigned>((x) & 0xffffffffu)
+
+/// Macro to signal a function that the result must be used.
+#define MUST_USE_RESULT __attribute__((__warn_unused_result__))
 
 
 #endif // _UTILS_MACROS_H_

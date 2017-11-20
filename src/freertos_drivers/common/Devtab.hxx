@@ -102,7 +102,7 @@ public:
      * @param buf location to find write data
      * @param count number of bytes to write
      * @return number of bytes written upon success, -1 upon failure with errno
-               containing the cause
+     *         containing the cause
      */
     static ssize_t write(struct _reent *reent, int fd, const void *buf, size_t count);
 
@@ -112,9 +112,17 @@ public:
      * @param offset offset within file
      * @param whence type of seek to complete
      * @return resulting offset from beginning of file, -1 upon failure with
-               errno containing the cause
+     *         errno containing the cause
      */
     static _off_t lseek(struct _reent *reent, int fd, _off_t offset, int whence);
+
+    /** Get the status information of a file or device.
+     * @param reent thread safe reentrant structure
+     * @param fd file descriptor to get status of
+     * @param stat structure to fill status info into
+     * @return 0 upon success, -1 upon failure with errno containing the cause
+     */
+    static int fstat(struct _reent *reent, int fd, struct stat *stat);
 
     /** Request and ioctl transaction.
      * @param fd file descriptor
@@ -137,7 +145,7 @@ public:
     static int select(int nfds, fd_set *readfds, fd_set *writefds,
                       fd_set *exceptfds, long long timeout);
 
-    /** Clears the current thread's select bits. This is usedby ::select and
+    /** Clears the current thread's select bits. This is used by ::select and
      * ::pselect to ensure the necessary atomicity. */
     static void select_clear();
 
@@ -169,19 +177,26 @@ protected:
     virtual ssize_t write(File *, const void *, size_t) = 0;
 
     /** Seek method.
-     * @param file file reference for this device
+     * @param f file reference for this device
      * @param offset offset in bytes from whence directive
      * @param whence SEEK_SET if to set the file offset to an abosolute position,
      *               SEEK_CUR if to set the file offset from current position
      * @return current offest or negative error number upon error.
      */
-    virtual off_t lseek(File* file, off_t offset, int whence);
+    virtual off_t lseek(File* f, off_t offset, int whence);
+
+    /** Get the status information of a file or device.
+     * @param file file reference for this device
+     * @param stat structure to fill status info into
+     * @return 0 upon successor or negative error number upon error.
+     */
+    virtual int fstat(File* file, struct stat *stat) = 0;
 
     /** Request an ioctl transaction
      * @param file file reference for this device
      * @param key ioctl key
      * @param data key data
-     * @param return 0 upon success or negative error number upon error.
+     * @return 0 upon success or negative error number upon error.
      */
     virtual int ioctl(File *file, unsigned long int key, unsigned long data);
 
@@ -268,9 +283,10 @@ protected:
     friend class DeviceBufferBase;
     friend class OSSelectWakeup;
 
-private:
+protected:
     const char *name; /**< device name */
 
+private:
     /** first device in linked list */
     static Device *first;
 
@@ -292,6 +308,7 @@ protected:
      */
     Node(const char *name)
         : Device(name)
+        , mode_(0)
         , references_(0)
     {
     }
@@ -317,8 +334,17 @@ protected:
     /** Close method */
     int close(File *) OVERRIDE;
 
+    /** Get the status information of a file or device.
+     * @param file file reference for this device
+     * @param stat structure to fill status info into
+     * @return 0 upon successor or negative error number upon error.
+     */
+    virtual int fstat(File* file, struct stat *stat) override;
+
 protected:
     OSMutex lock_; ///< protects internal structures.
+    /// File open mode, such as O_NONBLOCK.
+    mode_t mode_;
 
     unsigned int references_; /**< number of open references */
 
@@ -349,7 +375,6 @@ protected:
 
     /** Request an ioctl transaction
     * @param file file reference for this device
-    * @param node node reference for this device
     * @param key ioctl key
     * @param data key data
     */

@@ -58,34 +58,22 @@ extern "C" {
 #include "executor/Service.hxx"
 #include "nmranet_config.h"
 
-ExecutorBase *ExecutorBase::list = NULL;
+void __attribute__((weak,noinline)) Executable::test_deletion() {} 
+
+Executable::~Executable() {
+    test_deletion();
+}
+
 
 /** Constructor.
- * @param name name of executor
- * @param priority thread priority
- * @param stack_size thread stack size
  */
 ExecutorBase::ExecutorBase()
     : name_(NULL) /** @todo (Stuart Baker) is "name" still in use? */
-    , next_(NULL)
     , activeTimers_(this)
     , done_(0)
     , started_(0)
     , selectPrescaler_(0)
 {
-    /** @todo (Stuart Baker) we need a locking mechanism here to protect
-     *  the list.
-     */
-    if (list == NULL)
-    {
-        list = this;
-        next_ = NULL;
-    }
-    else
-    {
-        next_ = list;
-        list = this;
-    }
     FD_ZERO(&selectRead_);
     FD_ZERO(&selectWrite_);
     FD_ZERO(&selectExcept_);
@@ -103,14 +91,17 @@ ExecutorBase *ExecutorBase::by_name(const char *name, bool wait)
      */
     for (; /* forever */;)
     {
-        ExecutorBase *current = list;
-        while (current)
         {
-            if (!strcmp(name, current->name_))
+            AtomicHolder hld(&headMu_);
+            ExecutorBase *current = head_;
+            while (current)
             {
-                return current;
+                if (!strcmp(name, current->name_))
+                {
+                    return current;
+                }
+                current = current->link_next();
             }
-            current = current->next_;
         }
         if (wait)
         {
@@ -133,6 +124,9 @@ ExecutorBase *ExecutorBase::by_name(const char *name, bool wait)
 class SyncExecutable : public Executable
 {
 public:
+    /// @param e is the executor on which to execute the callback
+    /// @param fn is the callback to execute. Caller should use std::move to
+    /// get the callback in here.
     SyncExecutable(ExecutorBase *e, std::function<void()>&& fn)
         : fn_(std::move(fn))
     {
@@ -145,7 +139,9 @@ public:
         fn_();
         n_.notify();
     }
+    /// Callback to run.
     std::function<void()> fn_;
+    /// Blocks the calling thread until the callback is done running.
     SyncNotifiable n_;
 };
 
@@ -221,6 +217,7 @@ void executor_loop_some(void* arg)
 void *ExecutorBase::entry()
 {
     started_ = 1;
+    sequence_ = 0;
     ExecutorBase* b = this;
     emscripten_set_main_loop_arg(&executor_loop_some, b, 100, true);
     return nullptr;
@@ -282,6 +279,7 @@ void ICACHE_FLASH_ATTR *ExecutorBase::entry()
 void *ExecutorBase::entry()
 {
     started_ = 1;
+    sequence_ = 0;
     selectHelper_.lock_to_thread();
     /* wait for messages to process */
     for (; /* forever */;)
@@ -305,6 +303,7 @@ void *ExecutorBase::entry()
         }
         if (msg != NULL)
         {
+            ++sequence_;
             current_ = msg;
             msg->run();
             current_ = nullptr;

@@ -38,13 +38,16 @@
 #define gcc
 #endif
 
+#if (!defined(TIVADCC_TIVA)) && (!defined(TIVADCC_CC3200))
+#error must define either TIVADCC_TIVA or TIVADCC_CC3200
+#endif
+
 #include <algorithm>
 #include <cstdint>
 
 #include "driverlib/interrupt.h"
 #include "driverlib/rom.h"
 #include "driverlib/rom_map.h"
-#include "driverlib/sysctl.h"
 #include "driverlib/timer.h"
 #include "driverlib/uart.h"
 #include "freertos/can_ioctl.h"
@@ -53,11 +56,18 @@
 #include "inc/hw_types.h"
 #include "inc/hw_uart.h"
 
+#ifdef TIVADCC_TIVA
+#include "driverlib/sysctl.h"
+#include "TivaGPIO.hxx"
+#else
+#include "driverlib/prcm.h"
+#include "driverlib/utils.h"
+#endif
+
 #include "Devtab.hxx"
 #include "dcc/Packet.hxx"
 #include "dcc/RailCom.hxx"
 #include "executor/Notifiable.hxx"
-#include "TivaGPIO.hxx"
 #include "RailcomDriver.hxx"
 
 /// This structure is safe to use from an interrupt context and a regular
@@ -70,7 +80,7 @@
 ///
 /// @deprecated, use @ref DeviceBuffer instead.
 ///
-/// @TODO(balazs.racz) replace uses of this class with DeviceBuffer (to enable
+/// @todo(balazs.racz) replace uses of this class with DeviceBuffer (to enable
 /// select support for example).
 template<class T, uint8_t SIZE> class FixedQueue {
 public:
@@ -81,8 +91,11 @@ public:
     {
     }
 
+    /// @return true if there is no entry in the queue.
     bool empty() { return size() == 0; }
+    /// @return true if the queue cannot accept more elements.
     bool full() { return size() >= SIZE; }
+    /// @return the current number of entries in the queue.
     size_t size() { return __atomic_load_n(&count_, __ATOMIC_SEQ_CST); }
 
     /// Returns the head of the FIFO (next element to read).
@@ -139,9 +152,14 @@ public:
     }
 
 private:
+    /// Payload of elements stored.
     T storage_[SIZE];
+    /// The index of the element to return next upon a read. This element is
+    /// typically full (unless the queue is empty itself).
     uint8_t rdIndex_;
+    /// The index of the element where to write the next input to.
     uint8_t wrIndex_;
+    /// How many elements are there in the queue.
     volatile uint8_t count_;
 };
 
@@ -190,6 +208,8 @@ class TivaDCC : public Node
 public:
     /** Constructor.
      * @param name name of this device instance in the file system
+     * @param railcom is the associated railcom driver, which will get the
+     * callbacks from the timing derived by the internal signal generator.
      */
   TivaDCC(const char *name, RailcomDriver *railcom);
 
@@ -210,11 +230,16 @@ public:
 
     /** Structure for supporting bit timing. */
     struct Timing {
+        /// In clock cycles: period ofthe timers
         uint32_t period;
+        /// When to transition output A; must be within the period
         uint32_t transition_a;
+        /// When to transition output B; must be within the period
         uint32_t transition_b;
     };
 
+    /// true if the DCC output signal is generated, false if it is turned off
+    /// (for estop or short).
     static bool output_enabled;
 
     /* WARNING: these functions (hw_init, enable_output, disable_output) MUST
@@ -222,18 +247,23 @@ public:
      * before the C++ constructors have run. This means that at the time of
      * calling these functions the state of the object would be undefined /
      * uninintialized. The only safe solution is to make them static. */
+    /// Initializes the DCC output hardware.
     static void hw_init() {
+#ifdef TIVADCC_TIVA
         MAP_SysCtlPeripheralEnable(HW::CCP_PERIPH);
         MAP_SysCtlPeripheralEnable(HW::INTERVAL_PERIPH);
-        MAP_SysCtlPeripheralEnable(HW::PIN_H_GPIO_PERIPH);
-        MAP_SysCtlPeripheralEnable(HW::PIN_L_GPIO_PERIPH);
-        MAP_SysCtlPeripheralEnable(HW::RAILCOM_TRIGGER_PERIPH);
         MAP_SysCtlPeripheralEnable(HW::RAILCOM_UART_PERIPH);
-        MAP_SysCtlPeripheralEnable(HW::RAILCOM_UARTPIN_PERIPH);
+        HW::PIN_H::hw_init();
+        HW::PIN_L::hw_init();
+        HW::RAILCOM_TRIGGER_Pin::hw_init();
+        HW::RAILCOM_UARTPIN::hw_init();
+#else
+        MAP_PRCMPeripheralClkEnable(HW::CCP_PERIPH, PRCM_RUN_MODE_CLK);
+        MAP_PRCMPeripheralClkEnable(HW::INTERVAL_PERIPH, PRCM_RUN_MODE_CLK);
+        MAP_PRCMPeripheralClkEnable(HW::RAILCOM_UART_PERIPH, PRCM_RUN_MODE_CLK);
+#endif
         internal_enable_output();
         disable_output();
-        MAP_GPIOPinConfigure(HW::RAILCOM_UARTPIN_CONFIG);
-        MAP_GPIOPinTypeUART(HW::RAILCOM_UARTPIN_BASE, HW::RAILCOM_UARTPIN_PIN);
         MAP_UARTConfigSetExpClk(
             HW::RAILCOM_UART_BASE, configCPU_CLOCK_HZ, 250000,
             UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE | UART_CONFIG_PAR_NONE);
@@ -242,11 +272,12 @@ public:
         HWREG(HW::RAILCOM_UART_BASE + UART_O_CTL) &= ~UART_CTL_RXE;
     }
 
+    /// Turns on DCC output.
     void enable_output() {
-        output_enabled = true;
         state_ = POWER_TURNON;
     }
 
+    /// Turns off DCC output.
     static void disable_output()
     {
         // This prevents a race condition with a dcc interrupt.
@@ -257,39 +288,34 @@ public:
         internal_disable_output();
     }
 
+    /// Sets the output to "shorted" state, which will cause it to be pulsed at
+    /// a very low duty cycle, hoping that this is just a capacitive load.
     void output_set_shorted() {
         state_ = POWER_SHORT_20P;
     }
 
 private:
-    // Helper function for turnon and the cutout.
+    /// Helper function for turnon and the cutout.
     static void internal_enable_output() {
-        MAP_GPIOPinConfigure(HW::PIN_H_GPIO_CONFIG);
-        MAP_GPIOPinConfigure(HW::PIN_L_GPIO_CONFIG);
-        MAP_GPIOPinTypeTimer(HW::PIN_H_GPIO_BASE, HW::PIN_H_GPIO_PIN);
-        MAP_GPIOPinTypeTimer(HW::PIN_L_GPIO_BASE, HW::PIN_L_GPIO_PIN);
+        output_enabled = true;
+        HW::BOOSTER_ENABLE_Pin::set(true);
+        HW::PIN_H::set_hw();
+        HW::PIN_L::set_hw();
     }
 
+    /// Helper function for turning off the output.
     static void internal_disable_output() {
         output_enabled = false;
-        MAP_GPIOPinWrite(HW::PIN_H_GPIO_BASE, HW::PIN_H_GPIO_PIN,
-                         HW::PIN_H_INVERT ? 0xff : 0);
-        MAP_GPIOPinWrite(HW::PIN_L_GPIO_BASE, HW::PIN_L_GPIO_PIN,
-                         HW::PIN_L_INVERT ? 0xff : 0);
-        MAP_GPIOPinWrite(HW::RAILCOM_TRIGGER_BASE,
-                         HW::RAILCOM_TRIGGER_PIN,
-                         HW::RAILCOM_TRIGGER_INVERT ? 0xff : 0);
-        MAP_GPIOPinTypeGPIOOutput(HW::PIN_H_GPIO_BASE, HW::PIN_H_GPIO_PIN);
-        MAP_GPIOPinTypeGPIOOutput(HW::PIN_L_GPIO_BASE, HW::PIN_L_GPIO_PIN);
-        MAP_GPIOPinTypeGPIOOutput(HW::RAILCOM_TRIGGER_BASE,
-                                  HW::RAILCOM_TRIGGER_PIN);
-        MAP_GPIOPinWrite(HW::PIN_H_GPIO_BASE, HW::PIN_H_GPIO_PIN,
-                         HW::PIN_H_INVERT ? 0xff : 0);
-        MAP_GPIOPinWrite(HW::PIN_L_GPIO_BASE, HW::PIN_L_GPIO_PIN,
-                         HW::PIN_L_INVERT ? 0xff : 0);
-        MAP_GPIOPinWrite(HW::RAILCOM_TRIGGER_BASE,
-                         HW::RAILCOM_TRIGGER_PIN,
-                         HW::RAILCOM_TRIGGER_INVERT ? 0xff : 0);
+        HW::BOOSTER_ENABLE_Pin::set(false);
+        HW::PIN_H::set(HW::PIN_H_INVERT);
+        HW::PIN_H::set_output();
+        HW::PIN_H::set(HW::PIN_H_INVERT);
+
+        HW::PIN_L::set(HW::PIN_L_INVERT);
+        HW::PIN_L::set_output();
+        HW::PIN_L::set(HW::PIN_L_INVERT);
+
+        HW::RAILCOM_TRIGGER_Pin::set(HW::RAILCOM_TRIGGER_INVERT);
     }
 
     /** Read from a file or device.
@@ -310,7 +336,6 @@ private:
 
     /** Request an ioctl transaction
      * @param file file reference for this device
-     * @param node node reference for this device
      * @param key ioctl key
      * @param data key data
      */
@@ -330,6 +355,7 @@ private:
     /** idle packet */
     static dcc::Packet IDLE_PKT;
 
+    /// Bit timings that we store and precalculate.
     typedef enum {
         DCC_ZERO,
         DCC_ONE,
@@ -350,10 +376,16 @@ private:
 
     int hDeadbandDelay_; /**< low->high deadband delay in clock count */
     int lDeadbandDelay_; /**< high->low deadband delay in clock count */
-    static bool savedOutputEnabled_; // for railcom cutout
+    int usecDelay_; /**< 1 usec of delay in clock count */
+    /// Stores the outpu_enabled variable during the railcom cutout to avoid
+    /// accidentally reenabling the output just because there was a railcom
+    /// cutout.
+    static bool savedOutputEnabled_;
 
+    /// Precalculated bit timings (translated to clock cycles).
     Timing timings[NUM_TIMINGS];
 
+    /// Internal state machine states.
     enum State
     {
         // DCC preamble bits
@@ -423,6 +455,7 @@ private:
         // Used during periods when a short is detected on the output
         POWER_SHORT_20P,
     };
+    /// Current state of internal state machine.
     State state_;
 
     /** Prepares a timing entry.
@@ -451,6 +484,16 @@ private:
     void fill_timing_turnon(BitEnum ofs, uint32_t period_usec,
                             uint32_t fill_usec);
 
+    #ifdef TIVADCC_CC3200
+    // This function is called differently in tivaware than CC3200.
+    void MAP_SysCtlDelay(unsigned ticks3) {
+        MAP_UtilsDelay(ticks3);
+    }
+    #endif
+
+
+    
+    /// Packets still waiting to be sent.
     FixedQueue<dcc::Packet, HW::Q_SIZE> packetQueue_;
     Notifiable* writableNotifiable_; /**< Notify this when we have free buffers. */
     RailcomDriver* railcomDriver_; /**< Will be notified for railcom cutout events. */
@@ -565,16 +608,14 @@ inline void TivaDCC<HW>::interrupt_handler()
             internal_disable_output();
             current_bit = DCC_ONE;
             // delay 1 usec
-            MAP_SysCtlDelay( lDeadbandDelay_ / 3 );
+            MAP_SysCtlDelay( usecDelay_ / 3 );
             // current_bit = RAILCOM_CUTOUT_POST;
             MAP_TimerLoadSet(HW::INTERVAL_BASE, TIMER_A,
                              timings[RAILCOM_CUTOUT_SECOND].period);
             state_ = DCC_MIDDLE_RAILCOM_CUTOUT;
-            MAP_GPIOPinWrite(HW::RAILCOM_TRIGGER_BASE,
-                             HW::RAILCOM_TRIGGER_PIN,
-                             HW::RAILCOM_TRIGGER_INVERT ? 0 : 0xff);
-            // Waits for transient after the trigger to pass.
-            MAP_SysCtlDelay( lDeadbandDelay_ * 2 );
+            HW::RAILCOM_TRIGGER_Pin::set(HW::RAILCOM_TRIGGER_INVERT ? false : true);
+            // Waits for transient after the trigger to pass. 6 usec.
+            MAP_SysCtlDelay( usecDelay_ * (HW::RAILCOM_TRIGGER_DELAY_USEC / 3));
             // Enables UART RX.
             railcomDriver_->start_cutout();
             break;
@@ -591,9 +632,7 @@ inline void TivaDCC<HW>::interrupt_handler()
             MAP_TimerLoadSet(HW::INTERVAL_BASE, TIMER_A,
                              timings[DCC_ONE].period);
             railcomDriver_->end_cutout();
-            MAP_GPIOPinWrite(HW::RAILCOM_TRIGGER_BASE,
-                             HW::RAILCOM_TRIGGER_PIN,
-                             HW::RAILCOM_TRIGGER_INVERT ? 0xff : 0);
+            HW::RAILCOM_TRIGGER_Pin::set(HW::RAILCOM_TRIGGER_INVERT ? true : false);
             break;
         case DCC_ENABLE_AFTER_RAILCOM:
             if (savedOutputEnabled_) {
@@ -706,29 +745,57 @@ inline void TivaDCC<HW>::interrupt_handler()
         HWREG(HW::INTERVAL_BASE + TIMER_O_TAILR) =
             timing->period + hDeadbandDelay_ * 2;
 
-        HWREG(HW::CCP_BASE + TIMER_O_TBMATCHR) = timing->transition_b;  // final
-        // since timer A starts later, the deadband delay cycle we set to be
-        // constant off (match == period)
-        HWREG(HW::CCP_BASE + TIMER_O_TAMATCHR) = hDeadbandDelay_;  // tmp
-        HWREG(HW::CCP_BASE + TIMER_O_TBILR) = timing->period;  // final
-        HWREG(HW::CCP_BASE + TIMER_O_TAILR) = hDeadbandDelay_;  // tmp
+        if (!HW::H_DEADBAND_DELAY_NSEC)
+        {
+            MAP_TimerDisable(HW::CCP_BASE, TIMER_A|TIMER_B);
+            // Sets final values for the cycle.
+            MAP_TimerLoadSet(HW::CCP_BASE, TIMER_A|TIMER_B, timing->period);
+            MAP_TimerMatchSet(HW::CCP_BASE, TIMER_A, timing->transition_a);
+            MAP_TimerMatchSet(HW::CCP_BASE, TIMER_B, timing->transition_b);
+            MAP_TimerEnable(HW::CCP_BASE, TIMER_A|TIMER_B);
 
-        // timer synchronize (if it works...)
-        HWREG(TIMER0_BASE + TIMER_O_SYNC) = HW::TIMER_SYNC;
+            MAP_TimerDisable(HW::INTERVAL_BASE, TIMER_A);
+            MAP_TimerLoadSet(HW::INTERVAL_BASE, TIMER_A, timing->period);
+            MAP_TimerEnable(HW::INTERVAL_BASE, TIMER_A);
 
-        // Switches back to asynch timer update.
-        HWREG(HW::CCP_BASE + TIMER_O_TAMR) |=
-            (TIMER_TAMR_TAMRSU | TIMER_TAMR_TAILD);
-        HWREG(HW::CCP_BASE + TIMER_O_TBMR) |=
-            (TIMER_TBMR_TBMRSU | TIMER_TBMR_TBILD);
-        HWREG(HW::INTERVAL_BASE + TIMER_O_TAMR) |=
-            (TIMER_TAMR_TAMRSU | TIMER_TAMR_TAILD);
+            // Switches back to asynch timer update.
+            HWREG(HW::CCP_BASE + TIMER_O_TAMR) |=
+                (TIMER_TAMR_TAMRSU | TIMER_TAMR_TAILD);
+            HWREG(HW::CCP_BASE + TIMER_O_TBMR) |=
+                (TIMER_TBMR_TBMRSU | TIMER_TBMR_TBILD);
+            HWREG(HW::INTERVAL_BASE + TIMER_O_TAMR) |=
+                (TIMER_TAMR_TAMRSU | TIMER_TAMR_TAILD);
+        }
+        else
+        {
 
-        // Sets final values for the cycle.
-        MAP_TimerLoadSet(HW::CCP_BASE, TIMER_A, timing->period);
-        MAP_TimerMatchSet(HW::CCP_BASE, TIMER_A, timing->transition_a);
-        MAP_TimerLoadSet(HW::INTERVAL_BASE, TIMER_A, timing->period);
+            HWREG(HW::CCP_BASE + TIMER_O_TBMATCHR) =
+                timing->transition_b; // final
+            // since timer A starts later, the deadband delay cycle we set to be
+            // constant off (match == period)
+            HWREG(HW::CCP_BASE + TIMER_O_TAMATCHR) = hDeadbandDelay_; // tmp
+            HWREG(HW::CCP_BASE + TIMER_O_TBILR) = timing->period;     // final
+            HWREG(HW::CCP_BASE + TIMER_O_TAILR) = hDeadbandDelay_;    // tmp
 
+// timer synchronize (if it works...)
+#ifdef TIVADCC_TIVA
+            HWREG(TIMER0_BASE + TIMER_O_SYNC) = HW::TIMER_SYNC;
+#endif
+
+            // Switches back to asynch timer update.
+            HWREG(HW::CCP_BASE + TIMER_O_TAMR) |=
+                (TIMER_TAMR_TAMRSU | TIMER_TAMR_TAILD);
+            HWREG(HW::CCP_BASE + TIMER_O_TBMR) |=
+                (TIMER_TBMR_TBMRSU | TIMER_TBMR_TBILD);
+            HWREG(HW::INTERVAL_BASE + TIMER_O_TAMR) |=
+                (TIMER_TAMR_TAMRSU | TIMER_TAMR_TAILD);
+
+            // Sets final values for the cycle.
+            MAP_TimerLoadSet(HW::CCP_BASE, TIMER_A, timing->period);
+            MAP_TimerMatchSet(HW::CCP_BASE, TIMER_A, timing->transition_a);
+            MAP_TimerLoadSet(HW::INTERVAL_BASE, TIMER_A, timing->period);
+        }
+        
         last_bit = current_bit;
     } else if (last_bit != current_bit)
     {
@@ -847,6 +914,7 @@ TivaDCC<HW>::TivaDCC(const char *name, RailcomDriver* railcom_driver)
     : Node(name)
     , hDeadbandDelay_(nsec_to_clocks(HW::H_DEADBAND_DELAY_NSEC))
     , lDeadbandDelay_(nsec_to_clocks(HW::L_DEADBAND_DELAY_NSEC))
+    , usecDelay_(nsec_to_clocks(1000))
     , writableNotifiable_(nullptr)
     , railcomDriver_(railcom_driver)
 {
@@ -879,8 +947,10 @@ TivaDCC<HW>::TivaDCC(const char *name, RailcomDriver* railcom_driver)
     MAP_TimerDisable(HW::CCP_BASE, TIMER_A);
     MAP_TimerDisable(HW::CCP_BASE, TIMER_B);
 
+#ifdef TIVADCC_TIVA
     MAP_TimerClockSourceSet(HW::CCP_BASE, TIMER_CLOCK_SYSTEM);
     MAP_TimerClockSourceSet(HW::INTERVAL_BASE, TIMER_CLOCK_SYSTEM);
+#endif    
     MAP_TimerConfigure(HW::CCP_BASE, TIMER_CFG_SPLIT_PAIR |
                                     TIMER_CFG_A_PWM |
                                     TIMER_CFG_B_PWM);
@@ -919,12 +989,16 @@ TivaDCC<HW>::TivaDCC(const char *name, RailcomDriver* railcom_driver)
     MAP_TimerEnable(HW::CCP_BASE, TIMER_B);
     MAP_TimerEnable(HW::INTERVAL_BASE, TIMER_A);
 
+#ifdef TIVADCC_TIVA
     MAP_TimerSynchronize(TIMER0_BASE, TIMER_0A_SYNC | TIMER_0B_SYNC | TIMER_1A_SYNC | TIMER_1B_SYNC);
-
+#endif
+    
     MAP_TimerLoadSet(HW::CCP_BASE, TIMER_B, timings[DCC_ONE].period);
     MAP_TimerLoadSet(HW::INTERVAL_BASE, TIMER_A, timings[DCC_ONE].period);
     MAP_IntEnable(HW::INTERVAL_INTERRUPT);
 
+    // The OS interrupt does not come from the hardware timer.
+    MAP_TimerIntDisable(HW::CCP_BASE, 0xFFFFFFFF);
     // The OS interrupt comes under the freertos kernel.
     MAP_IntPrioritySet(HW::OS_INTERRUPT, configKERNEL_INTERRUPT_PRIORITY);
     MAP_IntEnable(HW::OS_INTERRUPT);

@@ -85,10 +85,19 @@ public:
     {
     }
 
-    /** Returns true if a thread was already created. */
+    /** @return true if a thread was already created. */
     bool is_created()
     {
         return handle != 0;
+    }
+
+    /** Inherits the current thread. */
+    void inherit()
+    {
+        HASSERT(!is_created());
+        handle = os_thread_self();
+        entry();
+        handle = 0;
     }
 
     /** Return the current thread priority.
@@ -216,7 +225,7 @@ public:
 
 #ifndef ESP_NONOS
     /** Wait on (decrement) a semaphore with timeout condition.
-     * @param timeout timeout in nanoseconds, else OS_WAIT_FOREVER to wait forever
+     * @param timeout timeout in nanoseconds, else OPENMRN_OS_WAIT_FOREVER to wait forever
      * @return 0 upon success, else -1 with errno set to indicate error
      */
     int timedwait(long long timeout)
@@ -426,12 +435,14 @@ private:
 class OSMutexLock
 {
 public:
+    /// Constructor. @param mutex is the mutex to lock.
     OSMutexLock(OSMutex* mutex)
         : mutex_(&mutex->handle)
     {
         os_mutex_lock(mutex_);
     }
 
+    /// Constructor. @param mutex is the mutex to lock.
     OSMutexLock(os_mutex_t* mutex)
         : mutex_(mutex)
     {
@@ -445,6 +456,7 @@ public:
 private:
     DISALLOW_COPY_AND_ASSIGN(OSMutexLock);
 
+    /// Mutex we are having locked.
     os_mutex_t* mutex_;
 };
 
@@ -475,15 +487,38 @@ private:
 
 /** Allows for OS abstracted access to time.
  */
+
+extern "C"
+{
+extern long long rtcOffset;
+}
+
 class OSTime
 {
 public:
     /** Get the monotonic time since the system started.
      * @return time in nanoseconds since system start
      */
-    static long long get_monotonic(void)
+    static long long get_monotonic()
     {
         return os_get_time_monotonic();
+    }
+
+    /** Get the current RTC time.
+     * @return time in nanoseconds of the RTC time.
+     */
+    static long long get_realtime()
+    {
+        /// @todo need to fill in the Real Time Clock infrastructure
+        return get_monotonic() + rtcOffset;
+    }
+
+    /** Set the current RTC time.
+     */
+    static void set_realtime(long long time)
+    {
+        /// @todo need to fill in the Real Time Clock infrastructure
+        rtcOffset = time - get_monotonic();
     }
 
 private:
@@ -551,7 +586,7 @@ public:
      */
     int wait(OSEventType mask, OSEventType *value, bool clear, Test test)
     {
-        return timedwait(mask, value, clear, test, OS_WAIT_FOREVER);
+        return timedwait(mask, value, clear, test, OPENMRN_OS_WAIT_FOREVER);
     }
 
     /** Wait on (decrement) an event with timeout condition.
@@ -562,14 +597,14 @@ public:
      * @param clear true if upon return the bits caled out in mask are to be
      *              cleared.  If a timeout occurs, no bits will be cleared.
      * @param test type of test on the mask bits
-     * @param timeout timeout in nanoseconds, else OS_WAIT_FOREVER to wait forever
+     * @param timeout timeout in nanoseconds, else OPENMRN_OS_WAIT_FOREVER to wait forever
      * @return 0 upon success, else -1 with errno set to indicate error
      */
     int timedwait(OSEventType mask, OSEventType *value, bool clear, Test test, long long timeout)
     {
         BaseType_t e_clear = clear ? pdTRUE : pdFALSE;
         BaseType_t e_test = test ? pdTRUE : pdFALSE;
-        TickType_t e_timeout = timeout == OS_WAIT_FOREVER ? portMAX_DELAY : timeout >> NSEC_TO_TICK_SHIFT;
+        TickType_t e_timeout = timeout == OPENMRN_OS_WAIT_FOREVER ? portMAX_DELAY : timeout >> NSEC_TO_TICK_SHIFT;
 
         OSEventType bits = xEventGroupWaitBits(event, mask, e_clear, e_test, e_timeout);
 

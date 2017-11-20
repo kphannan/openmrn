@@ -7,11 +7,12 @@
 #ifndef _UTILS_ASYNC_IF_TEST_HELPER_HXX_
 #define _UTILS_ASYNC_IF_TEST_HELPER_HXX_
 
-#include "nmranet/AliasAllocator.hxx"
-#include "nmranet/IfCan.hxx"
-#include "nmranet/EventService.hxx"
-#include "nmranet/DefaultNode.hxx"
-#include "nmranet/NodeInitializeFlow.hxx"
+#include "openlcb/AliasAllocator.hxx"
+#include "openlcb/IfCan.hxx"
+#include "openlcb/EventService.hxx"
+#include "openlcb/DefaultNode.hxx"
+#include "openlcb/NodeInitializeFlow.hxx"
+#include "executor/CallableFlow.hxx"
 #include "nmranet_config.h"
 #include "utils/GridConnectHub.hxx"
 #include "utils/test_main.hxx"
@@ -46,7 +47,7 @@ HubFlow gc_hub1(&g_service);
 CanHubFlow can_hub1(&g_service);
 GCAdapterBase *g_gc_adapter1 = nullptr;
 
-nmranet::InitializeFlow g_init_flow(&g_service);
+openlcb::InitializeFlow g_init_flow(&g_service);
 
 /** Helper class for setting expectation on the CANbus traffic in unit
  * tests. */
@@ -151,7 +152,7 @@ protected:
     */
     void expect_any_packet()
     {
-        print_all_packets();
+        if (!printer_) { print_all_packets(); }
         EXPECT_CALL(canBus_, mwrite(_)).Times(AtLeast(0));
         //.WillRepeatedly(WithArg<0>(Invoke(print_packet)));
     }
@@ -283,19 +284,7 @@ protected:
   StrictMock<MockSend> canBus1_;
 };
 
-/** Helper function for testing flow invocations. */
-template<class T, typename... Args>
-BufferPtr<T> invoke_flow(FlowInterface<Buffer<T>>* flow, Args &&... args) {
-    SyncNotifiable n;
-    BufferPtr<T> b(flow->alloc());
-    b->data()->reset(std::forward<Args>(args)...);
-    b->data()->done.reset(&n);
-    flow->send(b->ref());
-    n.wait_for_notification();
-    return b;
-}
-
-namespace nmranet
+namespace openlcb
 {
 
 static const NodeID TEST_NODE_ID = 0x02010d000003ULL;
@@ -310,11 +299,18 @@ static const NodeID TEST_NODE_ID = 0x02010d000003ULL;
 class AsyncIfTest : public AsyncCanTest
 {
 protected:
+    static int local_alias_cache_size;
+    static int local_node_count;
+    static int remote_alias_cache_size;
+
     AsyncIfTest()
         : pendingAliasAllocation_(false)
     {
-        ifCan_.reset(new IfCan(&g_executor, &can_hub0, 10, 10, 9));
-        ifCan_->local_aliases()->add(TEST_NODE_ID, 0x22A);
+        ifCan_.reset(new IfCan(&g_executor, &can_hub0, local_alias_cache_size, remote_alias_cache_size, local_node_count));
+        run_x([this]() { ifCan_->local_aliases()->add(TEST_NODE_ID, 0x22A); });
+        ifCan_->set_alias_allocator(
+            new AliasAllocator(TEST_NODE_ID, ifCan_.get()));
+
     }
 
     ~AsyncIfTest()
@@ -344,17 +340,9 @@ protected:
             ifCan_->set_alias_allocator(
                 new AliasAllocator(TEST_NODE_ID, ifCan_.get()));
         }
-        Buffer<AliasInfo> *a;
-        mainBufferPool->alloc(&a);
-        a->data()->reset();
-        a->data()->alias = alias;
-        a->data()->state = AliasInfo::STATE_RESERVED;
-        if (!repeat) {
-            a->data()->do_not_reallocate();
-        }
-        ifCan_->local_aliases()->add(AliasCache::RESERVED_ALIAS_NODE_ID,
-                                     a->data()->alias);
-        ifCan_->alias_allocator()->reserved_aliases()->insert(a);
+        run_x([this, alias, repeat]() {
+            ifCan_->alias_allocator()->TEST_add_allocated_alias(alias, repeat);
+        });
     }
 
     void expect_next_alias_allocation(NodeAlias a = 0)
@@ -410,6 +398,10 @@ protected:
     bool pendingAliasAllocation_;
 };
 
+int AsyncIfTest::local_alias_cache_size = 10;
+int AsyncIfTest::local_node_count = 9;
+int AsyncIfTest::remote_alias_cache_size = 10;
+
 /// Base class for test cases with one virtual node on a CANbus interface.
 class AsyncNodeTest : public AsyncIfTest
 {
@@ -449,16 +441,16 @@ protected:
     Node *node_;
 };
 
-/// Test handler for receiving incoming nmranet Message objects from a bus. The
+/// Test handler for receiving incoming openlcb Message objects from a bus. The
 /// incoming messages need GoogleMock expectations.
 ///
-/// Usage: see file src/nmranet/IfCan.cxxtest
+/// Usage: see file src/openlcb/IfCan.cxxtest
 class MockMessageHandler : public MessageHandler
 {
 public:
     MOCK_METHOD2(handle_message,
-                 void(NMRAnetMessage *message, unsigned priority));
-    virtual void send(Buffer<NMRAnetMessage> *message, unsigned priority)
+                 void(GenMessage *message, unsigned priority));
+    virtual void send(Buffer<GenMessage> *message, unsigned priority)
     {
         handle_message(message->data(), priority);
         message->unref();
@@ -532,6 +524,6 @@ MATCHER_P(IsBufferNodeValueString, id, "")
     return true;
 }
 
-} // namespace nmranet
+} // namespace openlcb
 
 #endif // _UTILS_ASYNC_IF_TEST_HELPER_HXX_

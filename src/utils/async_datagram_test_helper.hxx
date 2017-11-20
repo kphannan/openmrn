@@ -36,10 +36,10 @@
 #define _UTILS_ASYNC_DATAGRAM_TEST_HELPER_HXX_
 
 #include "utils/async_if_test_helper.hxx"
-#include "nmranet/Datagram.hxx"
-#include "nmranet/DatagramCan.hxx"
+#include "openlcb/Datagram.hxx"
+#include "openlcb/DatagramCan.hxx"
 
-namespace nmranet {
+namespace openlcb {
 
 /// Test base class for OpenLCB unittests that need a datagram handler.
 class AsyncDatagramTest : public AsyncNodeTest
@@ -102,7 +102,9 @@ protected:
             otherNodeIf_ = ifCan_.get();
             otherNodeDatagram_ = &datagram_support_;
         }
-        otherNodeIf_->local_aliases()->add(OTHER_NODE_ID, OTHER_NODE_ALIAS);
+        run_x([this]() {
+            otherNodeIf_->local_aliases()->add(OTHER_NODE_ID, OTHER_NODE_ALIAS);
+        });
         expect_packet(":X19100225N02010D000103;"); // node up
         otherNode_.reset(new DefaultNode(otherNodeIf_, OTHER_NODE_ID));
         wait();

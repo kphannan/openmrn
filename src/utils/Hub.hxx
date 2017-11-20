@@ -103,6 +103,7 @@ public:
     HubContainer() : skipMember_(0)
     {
     }
+    /// The type of the identified of these object in the HUB.
     typedef uintptr_t id_type;
     /// Defines which registered member of the hub should be skipped when the
     /// output members are enumerated.
@@ -147,21 +148,28 @@ static const uintptr_t POINTER_MASK = UINTPTR_MAX;
 template<class D> class GenericHubFlow : public DispatchFlow<Buffer<D>, 1>
 {
 public:
+    /// Payload of the buffer.
     typedef D value_type;
+    /// Type of a biffer being forwarded.
     typedef Buffer<value_type> buffer_type;
+    /// Base type of an individual port.
     typedef FlowInterface<buffer_type> port_type;
 
+    /// Constructor. @param s defines which executor to run this on.
     GenericHubFlow(Service *s) : DispatchFlow<Buffer<D>, 1>(s)
     {
         this->negateMatch_ = true;
     }
 
+    /// Adds a new port. After add return, all messages puslished to the hub
+    /// will be sent to 'port'. @param port is the object to add.
     void register_port(port_type *port)
     {
         this->register_handler(port, reinterpret_cast<uintptr_t>(port),
                                POINTER_MASK);
     }
 
+    /// Removes a previously added port. @param port is the port to remove.
     void unregister_port(port_type *port)
     {
         this->unregister_handler(port, reinterpret_cast<uintptr_t>(port),
@@ -203,6 +211,25 @@ public:
 private:
     bool timestamped_; ///< true if the timestamp and debug info should be
                        ///printed.
+};
+
+
+/** Shared base class for thread-based and select-based hub devices. */
+class FdHubPortInterface : public Destructable {
+public:
+    /// @return the filedes to read/write.
+    int fd()
+    {
+        return fd_;
+    }
+
+protected:
+    FdHubPortInterface() : fd_(-1) {}
+
+    FdHubPortInterface(int fd) : fd_(fd) {}
+
+    /** The device file descriptor. */
+    int fd_{-1};
 };
 
 #endif // _UTILS_HUB_HXX_

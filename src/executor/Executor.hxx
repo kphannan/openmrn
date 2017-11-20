@@ -44,6 +44,7 @@
 #include "executor/Timer.hxx"
 #include "utils/Queue.hxx"
 #include "utils/SimpleQueue.hxx"
+#include "utils/LinkedObject.hxx"
 #include "utils/logging.h"
 #include "utils/macros.h"
 #include "os/OSSelectWakeup.hxx"
@@ -58,7 +59,7 @@ class ActiveTimers;
 
 /** This class implements an execution of tasks pulled off an input queue.
  */
-class ExecutorBase : protected OSThread, protected Executable
+class ExecutorBase : protected OSThread, protected Executable, public LinkedObject<ExecutorBase>
 {
 public:
     /** Constructor.
@@ -83,7 +84,7 @@ public:
     virtual void add(Executable *action, unsigned priority = UINT_MAX) = 0;
 
     /** Synchronously runs a closure on this executor. Does not return until
-     * the execution is completed. */
+     * the execution is completed. @param fn is the closure to run. */
     void sync_run(std::function<void()> fn);
 
 #ifdef __FreeRTOS__
@@ -106,11 +107,12 @@ public:
      */
     void select(Selectable* job);
 
-    /** @returns true if the given job's FD is currently enqueued for a
+    /** @return true if the given job's FD is currently enqueued for a
      * select. This may or may not mean that the specific job is waiting for a
      * select call. If this returns true, it does mean that trying to select()
      * that job will cause a crash, since the same FD cannot be selected more
-     * than once. */
+     * than once.
+     * @param job is the selectable to query. */
     bool is_selected(Selectable* job);
 
     /** Removes a job from the select loop.
@@ -124,7 +126,7 @@ public:
      */
     void unselect(Selectable* job);
 
-    /** Performs one loop of the execution on the calling thread. Returns true
+    /** Performs one loop of the execution on the calling thread. @return true
      * if there is more scheduled work to do. Returns false if the executor
      * loop would block right now. */
     bool loop_once();
@@ -144,10 +146,20 @@ public:
      * executor. */
     void shutdown();
 
+    /// @return true if there are no executables waiting on this thread to be
+    /// executed. There could still be a current executable.
     virtual bool empty() = 0;
 
+    /// @return the thread handle.
     os_thread_t thread_handle() { return OSThread::get_handle(); }
 
+    /// Die if we are not on the current executor.
+    void assert_current() { HASSERT(os_thread_self() == thread_handle()); }
+    
+    /// @return a number that gets incremented by one every time an executable
+    /// runs.
+    virtual uint32_t sequence() = 0;
+    
 protected:
     /** Thread entry point.
      * @return Should never return
@@ -187,11 +199,19 @@ private:
      * on the return. Will not sleep at all if not empty, otherwise sleeps at
      * most next_timer_nsec nanoseconds (from now).
      *
-     * @param next_timer is the maximum time to sleep in nanoseconds. */
+     * @param next_timer_nsec is the maximum time to sleep in nanoseconds. */
     void wait_with_select(long long next_timer_nsec);
 
-    fd_set* get_select_set(Selectable::SelectType type) {
-        switch(type) {
+    /// Helper function.
+    ///
+    /// @param type a select type: READ, WRITE or EXCEPT
+    ///
+    /// @return the fd_set that's being waited for that given select type.
+    ///
+    fd_set *get_select_set(Selectable::SelectType type)
+    {
+        switch (type)
+        {
         case Selectable::READ: return &selectRead_;
         case Selectable::WRITE: return &selectWrite_;
         case Selectable::EXCEPT: return &selectExcept_;
@@ -202,12 +222,6 @@ private:
 
     /** name of this Executor */
     const char *name_;
-
-    /** next executor in the lookup list */
-    ExecutorBase *next_;
-
-    /** executor list for lookup purposes */
-    static ExecutorBase *list;
 
     /** Currently executing closure. USeful for debugging crashes. */
     Executable* current_;
@@ -229,9 +243,16 @@ private:
     /** Set to 1 when the executor thread has exited and it is safe to delete
      * *this. */
     unsigned done_ : 1;
+    /// 1 if the executor is already running
     unsigned started_ : 1;
+    /// How many executables we schedule blindly before calling a select() in
+    /// order to find more data to read/write in the FDs being waited upon.
     unsigned selectPrescaler_ : 5;
 
+protected:
+    /// Sequence number.
+    volatile unsigned sequence_ : 25;
+    
     /** provide access to Executor::send method. */
     friend class Service;
 
@@ -265,8 +286,20 @@ public:
         start_thread(name, priority, stack_size);
     }
 
+    /// Constructor that does not create a thread for running the executor. The
+    /// owner should later create a thread to this executor by calling the
+    /// start_thread() function or donate a thread by calling thread_body()
+    /// function.
+    /// @param unused unused -- just here for polymorphic disalbiguation.
     explicit Executor(const NO_THREAD& unused) {}
 
+    /// Creates a new thread for running this executor.
+    ///
+    /// @param name thread name (passed to OS)
+    /// @param priority thread priority (0 == default prio)
+    /// @param stack_size number of bytes to allocate for the thread stack; used
+    /// only for FreeRTOS and ignored on linux etc.
+    ///
     void start_thread(const char *name, int priority, size_t stack_size)
     {
         OSThread::start(name, priority, stack_size);
@@ -310,14 +343,17 @@ public:
      * be called to run the executor loop. It will exit when the execut gets
      * shut down. Useful for having an executor loop run in the main thread. */
     void thread_body() {
-        HASSERT(!is_created());
-        entry();
+        inherit();
     }
 
+    /// @return true if there are no executables waiting on this thread to be
+    /// executed. There could still be a current executable.
     bool empty() OVERRIDE
     {
         return queue_.empty();
     }
+
+    uint32_t sequence() OVERRIDE { return sequence_; }
 
 private:
 #ifndef ESP_NONOS
@@ -364,6 +400,7 @@ private:
 
     DISALLOW_COPY_AND_ASSIGN(Executor);
 
+    /// Internal queue of executables waiting to be scheduled.
     QListProtectedWait<NUM_PRIO> queue_;
 };
 
@@ -373,11 +410,13 @@ private:
 class ExecutorGuard : private Executable, public SyncNotifiable
 {
 public:
+    /// Constructor. @param e is the executor to look for being empty.
     ExecutorGuard(ExecutorBase* e)
         : executor_(e) {
         executor_->add(this);  // lowest priority
     }
 
+    /// Implementation of the guard functionality. Called on the executor.
     void run() override {
         if (executor_->empty()) {
             SyncNotifiable::notify();
@@ -386,6 +425,7 @@ public:
         }
     }
 private:
+    /// Parent.
     ExecutorBase* executor_;
 };
 

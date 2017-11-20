@@ -134,8 +134,11 @@ typedef pthread_once_t os_thread_once_t; /**< one time initialization type */
 /** Some Operating Systems do not support timeouts with semaphores */
 typedef struct
 {
+    /// Condition variable.
     pthread_cond_t cond;
+    /// Mutex protectin the counter
     pthread_mutex_t mutex;
+    /// How many counts doe the semaphore store.
     int counter;
 } os_sem_t;
 #endif
@@ -204,9 +207,9 @@ OS_INLINE int os_thread_once(os_thread_once_t *once, void (*routine)(void))
 #define OS_MQ_FULL     3 /**< error code for queue being full */
 
 #if defined LLONG_MAX
-#define OS_WAIT_FOREVER LLONG_MAX /**< maximum timeout period */
+#define OPENMRN_OS_WAIT_FOREVER LLONG_MAX /**< maximum timeout period */
 #else
-#define OS_WAIT_FOREVER __LONG_LONG_MAX__ /**< maximum timeout period */
+#define OPENMRN_OS_WAIT_FOREVER __LONG_LONG_MAX__ /**< maximum timeout period */
 #endif
 
 /** Convert a nanosecond value to a microsecond value.
@@ -226,6 +229,12 @@ OS_INLINE int os_thread_once(os_thread_once_t *once, void (*routine)(void))
  * @return second value
  */
 #define NSEC_TO_SEC(_nsec) (((long long)_nsec) / 1000000000LL)
+
+/** Convert a nanosecond value to minutes.
+ * @param _nsec nanosecond value to convert
+ * @return minutes value
+ */
+#define NSEC_TO_MIN(_nsec) (((long long)_nsec) / 60000000000LL)
 
 /** Convert a microsecond value to a nanosecond value.
  * @param _usec microsecond value to convert
@@ -618,12 +627,12 @@ OS_INLINE int os_sem_wait(os_sem_t *sem)
 #ifndef ESP_NONOS
 /** Wait on a semaphore with a timeout.
  * @param sem address of semaphore to decrement
- * @param timeout in nanoseconds, else OS_WAIT_FOREVER to wait forever
+ * @param timeout in nanoseconds, else OPENMRN_OS_WAIT_FOREVER to wait forever
  * @return 0 upon success, else -1 with errno set to indicate error
  */
 OS_INLINE int os_sem_timedwait(os_sem_t *sem, long long timeout)
 {
-    if (timeout == OS_WAIT_FOREVER)
+    if (timeout == OPENMRN_OS_WAIT_FOREVER)
     {
         return os_sem_wait(sem);
     }
@@ -763,7 +772,7 @@ OS_INLINE int os_mq_timedsend(os_mq_t queue, const void *data, long long timeout
 {
 #if defined (__FreeRTOS__)
     portTickType ticks = (timeout >> NSEC_TO_TICK_SHIFT);
-
+    
     if (xQueueSend(queue, data, ticks) != pdTRUE)
     {
         return OS_MQ_TIMEDOUT;
@@ -931,6 +940,11 @@ OS_INLINE int os_mq_num_spaces(os_mq_t queue)
     }
 #endif
 
+#ifdef TARGET_PIC32MX
+
+void __attribute__((nomips16)) os_isr_exit_yield_test(int woken);
+
+#else
 /** Test if we have woken up a higher priority task as the end of an interrupt.
  * @param _woken test value
  */
@@ -939,6 +953,8 @@ do                                     \
 {                                      \
     portEND_SWITCHING_ISR(_woken);     \
 } while(0);
+
+#endif // PIC32 or general
 #endif
 
 /** Get the monotonic time since the system started.
@@ -957,34 +973,6 @@ OS_INLINE unsigned sleep(unsigned seconds)
 }
 #endif
 
-/* This section of code is required because CodeSourcery's mips-gcc
- * distribution contains a strangely compiled NewLib (in the unhosted-libc.a
- * version) that does not forward these function calls to the implementations
- * we have. We are thus forced to override their weak definition of these
- * functions. */
-#if defined(TARGET_PIC32MX) || defined(ESP_NONOS)
-#include "reent.h"
-
-OS_INLINE int open(const char* b, int flags, ...) {
-    return _open_r(_impure_ptr, b, flags, 0);
-}
-OS_INLINE int close(int fd) {
-    return _close_r(_impure_ptr, fd);
-}
-OS_INLINE ssize_t read(int fd, void* buf, size_t count) {
-    return _read_r(_impure_ptr, fd, buf, count);
-}
-OS_INLINE ssize_t write(int fd, const void* buf, size_t count) {
-    return _write_r(_impure_ptr, fd, buf, count);
-}
-OS_INLINE off_t lseek(int fd, off_t offset, int whence) {
-    return _lseek_r(_impure_ptr, fd, offset, whence);
-}
-OS_INLINE int fstat(int fd, struct stat* buf) {
-    return _fstat_r(_impure_ptr, fd, buf);
-}
-
-#endif
 
 #ifdef __cplusplus
 }

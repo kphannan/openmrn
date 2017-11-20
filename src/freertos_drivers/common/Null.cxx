@@ -33,6 +33,8 @@
 
 #include "Devtab.hxx"
 
+#include <sys/stat.h>
+
 /** default stdin */
 const char *STDIN_DEVICE __attribute__ ((weak)) = "/dev/null";
 
@@ -63,6 +65,14 @@ public:
     ssize_t read(File *, void *, size_t) OVERRIDE;
     /** Write method */
     ssize_t write(File *, const void *, size_t) OVERRIDE;
+
+    /** Get the status information of a file or device.
+     * @param file file reference for this device
+     * @param stat structure to fill status info into
+     * @return 0 upon successor or negative error number upon error.
+     */
+    int fstat(File* file, struct stat *stat);
+
 };
 
 /// Filesystem node for the null device.
@@ -82,7 +92,6 @@ int Null::open(File* file, const char *path, int flags, int mode)
 
 /** Close a device.
  * @param file file reference for this device
- * @param node node reference for this device
  * @return 0 upon success, negative errno upon failure
  */
 int Null::close(File *file)
@@ -112,3 +121,15 @@ ssize_t Null::write(File *file, const void *buf, size_t count)
 {    
     return count;
 }
+
+/** Get the status information of a file or device.
+ * @param file file reference for this device
+ * @param stat structure to fill status info into
+ * @return 0 upon successor or negative error number upon error.
+ */
+int Null::fstat(File* file, struct stat *stat)
+{
+    memset(stat, 0, sizeof(*stat));
+    return 0;
+}
+

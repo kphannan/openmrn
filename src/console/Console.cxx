@@ -31,195 +31,60 @@
  * @date 10 May 2014
  */
 
-#if defined (__FreeRTOS__)
-#else
-#define CONSOLE_NETWORKING
+#include "console/Console.hxx"
+
+#if defined (CONSOLE_NETWORKING)
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #endif
+
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
 
-#include "console/Console.hxx"
-
-/** Constructor.
- * @param stdio start a Console connection instance on stdio if true
- * @param port TCP port number to open a telnet listen socket on, -1 means
- *        do not open a listen port.
+/*
+ * Console::Console()
  */
-Console::Console(bool stdio, int port)
-    : OSThread()
+Console::Console(ExecutorBase *executor, uint16_t port)
+    : Service(executor)
     , help("help", help_command, this, &helpMark)
     , helpMark("?", help_command, this)
-    , first(NULL)
-    , fdListen(-1)
-    , fdHighest(0)
-{
-    FD_ZERO(&readfds);
-    if (port >= 0)
-    {
-        listen_create(port);
-    }
-
-    if (stdio)
-    {
-        open_session(0);
-    }
-
-    add_command("quit", quit_command, this);
-    start("console", 0, 1024);
-}
-
-/** Open and initialize a new session.
- * @param fd file descriptor belonging to session
- */
-void Console::open_session(int fd)
-{
-    fcntl(0, F_SETFL, fcntl(0, F_GETFL, 0) | O_NONBLOCK);
-    Session *new_session = new Session(fd);
-
-    if (first == NULL)
-    {
-        first = new_session;
-    }
-    else if (fd < first->fd)
-    {
-        new_session->next = first;
-        first = new_session;
-    }
-    else
-    {
-        Session *current = first->next;
-        Session *last = first;
-
-        while (current)
-        {
-            if (current->fd > fd && last->fd < fd)
-            {
-                break;
-            }
-            last = current;
-            current = current->next;
-        }
-        last->next = new_session;
-        new_session->next = current;
-    }
-    if (fd > fdHighest)
-    {
-        fdHighest = fd;
-    }
-    FD_SET(fd, &readfds);
-    prompt(new_session->fp);
-
-}
-
-/** Close a previously established session
- * @param s Session to close
- */
-void Console::close_session(Session *s)
-{
-    /** @todo need to pull this out of the Session list */
-    FD_CLR(s->fd, &readfds);
-
-    if (fdHighest == s->fd)
-    {
-        for (int i = s->fd; i >= 0; --i)
-        {
-            if (FD_ISSET(i, &readfds))
-            {
-                fdHighest = s->fd;
-                break;
-            }
-        }
-    }
-    fclose(s->fp);
-    close(s->fd);
-    free(s->line);
-    delete s;
-}
-
-/** Get the session belonging to a file descriptor.
- * @param fd file descriptor
- * @return session belonging to the file descriptor
- */
-Console::Session *Console::get_session(int fd)
-{
-    for (Session *current = first; current; current = current->next)
-    {
-        if (current->fd == fd)
-        {
-            return current;
-        }
-    }
-    return NULL;
-}
-
-/** Create a listen socket.
- * @param port port number to listen on
- */
-void Console::listen_create(int port)
-{
 #if defined (CONSOLE_NETWORKING)
-    int                yes = 1;
-    struct sockaddr_in sockaddr;
-    int                result;
-
-    memset(&sockaddr, 0, sizeof(sockaddr));
-    sockaddr.sin_family = AF_INET;
-    sockaddr.sin_addr.s_addr = INADDR_ANY;
-
-    sockaddr.sin_port = htons(port);
-
-    fdListen = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (fdListen < 0)
-    {
-        printf("Unable to create listen socket, punt: %s\n", strerror(errno));
-        abort();
-    }
-
-    result = setsockopt(fdListen, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
-    if (result != 0)
-    {
-        printf("Unable to setsockopt SO_REUSEADDR, punt: %s\n", strerror(errno));
-        abort();
-    }
-
-    /* turn off the nagel alogrithm */
-    result = setsockopt(fdListen, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(int));
-    if (result != 0)
-    {
-        printf("Unable to setsockopt TCP_NODELAY, punt: %s\n", strerror(errno));
-        abort();
-    }
-
-    result = bind(fdListen, (struct sockaddr*)&sockaddr, sizeof(sockaddr));
-    if (result != 0)
-    {
-        if (errno == EADDRINUSE)
-        {
-            printf("Address in use\n");
-        }
-        printf("Unable to bind socket, punt: %s\n", strerror(errno));
-        abort();
-    }
-
-    result = listen(fdListen, 10);
-    if (result != 0)
-    {
-        printf("Unable to listen on socket, punt: %s\n", strerror(errno));
-        abort();
-    }
-    FD_SET(fdListen, &readfds);
-    fdHighest = fdListen;
+    , listen(this, port)
 #endif
+{
+    add_command("quit", quit_command, this);
 }
 
-/** Add a new command to the console.
- * @param name command name
- * @param callback callback function for command
- * @param context context pointer to pass into callback
+/*
+ * Console::Console()
+ */
+Console::Console(ExecutorBase *executor, int fd_in, int fd_out, int port)
+    : Service(executor)
+    , help("help", help_command, this, &helpMark)
+    , helpMark("?", help_command, this)
+#if defined (CONSOLE_NETWORKING)
+    , listen(this, port)
+#endif
+{
+    open_session(fd_in, fd_out);
+    add_command("quit", quit_command, this);
+}
+
+/*
+ * Console::open_session()
+ */
+void Console::open_session(int fd_in, int fd_out)
+{
+#ifdef HAVE_BSDSOCKET
+    fcntl(fd_in, F_SETFL, fcntl(fd_in, F_GETFL, 0) | O_NONBLOCK);
+#endif
+    new Session(this, fd_in, fd_out);
+}
+
+/*
+ * Console::add_command()
  */
 void Console::add_command(const char *name, Callback callback, void *context)
 {
@@ -235,15 +100,12 @@ void Console::add_command(const char *name, Callback callback, void *context)
     current->next = new Command(name, callback, context);
 }
 
-/** Print out the help menu.
- * @param fp file pointer to console
- * @param argc number of arguments including the command itself
- * @param argv array of arguments starting with the command itself
- * @return COMMAND_OK
+/*
+ * Console::help_command()
  */
-int Console::help_command(FILE *fp, int argc, const char *argv[])
+Console::CommandStatus Console::help_command(FILE *fp, int argc, const char *argv[])
 {
-    fprintf(fp, "%10s : print out this help memu\n", "help | ?");    
+    fprintf(fp, "%10s : print out this help menu\n", "help | ?");    
 
     /* call each of the commands with argc = 0 */
     for (Command *current = helpMark.next; current; current = current->next)
@@ -256,13 +118,10 @@ int Console::help_command(FILE *fp, int argc, const char *argv[])
     return COMMAND_OK;
 }
 
-/** Quit out of the current login session.
- * @param fp file pointer to console
- * @param argc number of arguments including the command itself
- * @param argv array of arguments starting with the command itself
- * @return COMMAND_OK
+/*
+ * Console::quit_command()
  */
-int Console::quit_command(FILE *fp, int argc, const char *argv[])
+Console::CommandStatus Console::quit_command(FILE *fp, int argc, const char *argv[])
 {
     switch (argc)
     {
@@ -278,179 +137,299 @@ int Console::quit_command(FILE *fp, int argc, const char *argv[])
     }
 }
 
-/** Process a potential callback for a given command
- * @param fp file pointer to console
- * @param argc number of arguments including the command itself
- * @param argv array of arguments starting with the command itself
- * @return if false, close the session
+/*
+ * Console::CommandFlow::CommandFlow()
  */
-bool Console::callback(FILE *fp, int argc, const char *argv[])
+Console::CommandFlow::CommandFlow(Console *console, const char *name)
+    : StateFlowBase(console)
 {
+    Command *current = &console->helpMark;
+
+    /* seek to the end of the list */
+    while (current->next)
+    {
+        current = current->next;
+    }
+
+    /** add the command to the end of the list */
+    command = new Command(name, this);
+    current->next = command;
+}
+
+/*
+ * Console::CommandFlow::CommandFlow()
+ */
+Console::CommandFlow::~CommandFlow()
+{
+    Console *console = static_cast<Console *>(service());
+    Command *current = &console->helpMark;
+
+    /* seek to just before our command instance */
+    while (current)
+    {
+        if (current->next == command)
+        {
+            /* remove and our command from the list and delete instance */
+            current->next = command->next;
+            delete command;
+            break;
+        }
+        current = current->next;
+    }
+}
+
+#if defined (CONSOLE_NETWORKING)
+/*
+ * Console::Listen::Listen()
+ */
+Console::Listen::Listen(Service *service, int port)
+    : StateFlowBase(service)
+    , fdListen(-1)
+    , selectHelper(this)
+{
+    if (port < 0)
+    {
+        /* invalid port number, this class will do nothing */
+        return;
+    }
+
+    int                yes = 1;
+    struct sockaddr_in sockaddr;
+    int                result;
+
+    memset(&sockaddr, 0, sizeof(sockaddr));
+    sockaddr.sin_family = AF_INET;
+    sockaddr.sin_addr.s_addr = INADDR_ANY;
+    sockaddr.sin_port = htons(port);
+
+    /* open TCP socket */
+    fdListen = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    HASSERT(fdListen >= 0);
+
+    /* reuse socket address if already in lingering use */
+    result = setsockopt(fdListen, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
+    HASSERT(result == 0);
+
+    /* turn off the nagel alogrithm */
+    result = setsockopt(fdListen, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(int));
+    HASSERT(result == 0);
+
+    /* bind the address parameters to the socket */
+    result = bind(fdListen, (struct sockaddr*)&sockaddr, sizeof(sockaddr));
+    HASSERT(result == 0);
+
+    /* set socket non-blocking */
+    result = fcntl(fdListen, F_SETFL, fcntl(0, F_GETFL, 0) | O_NONBLOCK);
+    HASSERT(result == 0);
+
+    /* mark socket as listen */
+    result = ::listen(fdListen, 10);
+    HASSERT(result == 0);
+
+    /* start state flow */
+    start_flow(STATE(entry));
+}
+
+/*
+ * Console::Listen::accept()
+ */
+StateFlowBase::Action Console::Listen::accept()
+{
+    int newfd = ::accept(fdListen, NULL, NULL);
+    if (newfd >= 0)
+    {
+        int yes = 1;
+        int result = setsockopt(newfd, IPPROTO_TCP,
+                                TCP_NODELAY, &yes, sizeof(int));
+        HASSERT(result == 0);
+        static_cast<Console *>(service())->open_session(newfd, newfd);
+    }
+
+    return listen_and_call(&selectHelper, fdListen, STATE(accept));
+}
+#endif
+
+/*
+ * Console::Listen::process_read()
+ */
+StateFlowBase::Action Console::Session::process_read()
+{
+    size_t count = (line_size - pos) - selectHelper.remaining_;
+
+    if (count == 0)
+    {
+        struct stat stat;
+        fstat(fdIn, &stat);
+#ifdef HAVE_BSDSOCKET
+        if (S_ISSOCK(stat.st_mode))
+        {
+            /* Socket connection closed */
+            return delete_this();
+        }
+#endif
+    }
+
+    while(count--)
+    {
+        if (line[pos++] == '\n')
+        {
+            /* parse the line input into individual arguments */
+            unsigned argc = 0;
+            char last = '\0';
+
+            for (size_t i = 0; i < pos; ++i)
+            {
+                switch (line[i])
+                {
+                    case '\r':
+                    case '\n':
+                    case ' ':
+                        line[i] = '\0';
+                        break;
+                    case '"':
+                        /** @todo quoted arguments not yet supported */
+                    default:
+                        if (last == '\0')
+                        {
+                            args[argc] = &line[i];
+                            argc = (argc == MAX_ARGS) ? MAX_ARGS : argc + 1;
+                        }
+                        break;
+                }
+                last = line[i];
+            }
+
+            if (command != nullptr)
+            {
+                command->flow->notify();
+                command->flow->argc = argc;
+                command->flow->argv = args;
+                //printf("%s", args[0]);
+                return wait_and_call(STATE(exit_interactive));
+            }
+
+            switch (argc)
+            {
+                case 0:
+                    break;
+                case MAX_ARGS:
+                    fprintf(fp, "too many arguments\n");
+                    break;
+                default:
+                {
+                    CommandStatus status = callback(argc, args);
+                    if (status == COMMAND_NEXT)
+                    {
+                        return wait_and_call(STATE(exit_interactive));
+                    }
+                    else
+                    {
+                        if (callback_result_process(status, args[0]) == false)
+                        {
+                            return delete_this();
+                        }
+                    }
+                }
+            }
+            pos = 0;
+            prompt(fp);
+        }
+        else
+        {
+            if (pos >= line_size)
+            {
+                /* double the line buffer size */
+                line_size *= 2;
+                char *new_line = (char*)malloc(line_size);
+                memcpy(new_line, line, pos);
+                free(line);
+                line = new_line;
+            }
+        }
+    }
+    return call_immediately(STATE(entry));
+}
+
+/*
+ * Console::Session::Callback()
+ */
+Console::CommandStatus Console::Session::callback(int argc, const char *argv[])
+{
+    Console *console = static_cast<Console *>(service());
+
     /* run through each command */
-    for (Command *current = &help; current; current = current->next)
+    for (Command *current = &console->help; current; current = current->next)
     {
         /* look for a command match */
         if (strcmp(current->name, argv[0]) == 0)
         {
             /* found a match, call the registered callback */
-            int result = (*current->callback)(fp, argc, argv, current->context);
-            switch (result)
+            if (current->interactive)
             {
-                default:
-                    break;
-                case COMMAND_ERROR:
-                    fprintf(fp, "invalid arguments\n");
-                    break;
-                case COMMAND_CLOSE:
-                    return false;
+                command = current;
+                return current->flow->callback(this, fdIn, fp, argc, argv);
             }
-            return true;
+            else
+            {
+                return (*current->callback)(fp, argc, argv, current->context);
+            }
         }
     }
-    fprintf(fp, "%s: command not found\n", argv[0]);
+
+    return COMMAND_NOT_FOUND;
+}
+
+/*
+ * Console::Session::exit_interactive()
+ */
+StateFlowBase::Action Console::Session::exit_interactive()
+{
+    if (command->flow->status == COMMAND_NEXT)
+    {
+        pos = 0;
+        return call_immediately(STATE(entry));
+    }
+    HASSERT(callback_result_process(command->flow->status, command->name) == true);
+
+    pos = 0;
+    prompt(fp);
+    
+    command = nullptr;
+
+    return call_immediately(STATE(entry));
+}
+
+/*
+ * Console::Session::callback_result_process()
+ */
+bool Console::Session::callback_result_process(CommandStatus status,
+                                               const char *name)
+{
+    switch (status)
+    {
+        default:
+            break;
+        case COMMAND_ERROR:
+            fprintf(fp, "invalid arguments\n");
+            break;
+        case COMMAND_CLOSE:
+        {
+            struct stat stat;
+            fstat(fdIn, &stat);
+#ifdef HAVE_BSDSOCKET
+            if (S_ISSOCK(stat.st_mode))
+            {
+                fprintf(fp, "shutting down session\n");
+                return false;
+            }
+#endif
+            fprintf(fp, "session not a socket, "
+                        "aborting session shutdown\n");
+            break;
+        }
+        case COMMAND_NOT_FOUND:
+            fprintf(fp, "%s: command not found\n", name);
+    }
+
     return true;
 }
-
-/** Decode in incoming character.
- * @param c character to decode
- * @param s console session the character belongs to
- */
-void Console::decode(char c, Session *s)
-{
-    s->line[s->pos++] = c;
-
-    if (c == '\n')
-    {
-        /* parse the line input into individual arguments */
-        unsigned argc = 0;
-        const char *args[MAX_ARGS];
-        char last = '\0';
-
-        for (size_t i = 0; i < s->pos; ++i)
-        {
-            switch (s->line[i])
-            {
-                case '\r':
-                case '\n':
-                case ' ':
-                    s->line[i] = '\0';
-                    break;
-                case '"':
-                default:
-                    if (last == '\0')
-                    {
-                        args[argc] = &s->line[i];
-                        argc = (argc == MAX_ARGS) ? MAX_ARGS : argc + 1;
-                    }
-                    break;
-            }
-            last = s->line[i];
-        }
-
-        switch (argc)
-        {
-            case 0:
-                break;
-            case MAX_ARGS:
-                fprintf(s->fp, "too many arguments\n");
-                break;
-            default:
-                if (callback(s->fp, argc, args) == false)
-                {
-                    struct stat stat;
-                    fstat(s->fd, &stat);
-                    if (stat.st_mode & S_IFSOCK)
-                    {
-                        fprintf(s->fp, "shutting down session\n");
-                        close_session(s);
-                        return;
-                    }
-                    fprintf(s->fp, "session not a socket,"
-                                   " aborting session shutdown\n");
-                }
-                break;
-        }
-        s->pos = 0;
-        prompt(s->fp);
-    }
-    else
-    {
-        if (s->pos >= s->line_size)
-        {
-            /* double the line buffer size */
-            s->line_size *= 2;
-            char *new_line = (char*)malloc(s->line_size);
-            memcpy(s->line, new_line, s->pos);
-            free(s->line);
-            s->line = new_line;
-        }
-    }
-}
-
-/** Entry point to the thread.
- * @return should never return
- */
-void *Console::entry()
-{
-    for ( ; /* forever */ ; )
-    {
-        fd_set rfds = readfds;
-        int result = select(fdHighest + 1, &rfds, NULL, NULL, NULL);
-        if (result <= 0)
-        {
-            if (errno == EINTR)
-            {
-                continue;
-            }
-            printf("select failed: %s\n", strerror(errno));
-            abort();
-        }
-        for (int i = 0; i <= fdHighest && result > 0; i++)
-        {
-            if (FD_ISSET(i, &rfds))
-            {
-                --result;
-#if defined (CONSOLE_NETWORKING)
-                if (i == fdListen)
-                {
-                    /* establish a new connection request for a new session */
-                    int newfd = accept(fdListen, NULL, NULL);
-                    if (newfd < 0)
-                    {
-                        printf("accept failed: %s\n", strerror(errno));
-                        abort();
-                    }
-
-                    int yes   = 1;
-                    result = setsockopt(newfd, IPPROTO_TCP,
-                                        TCP_NODELAY, &yes, sizeof(int));
-                    if (result != 0)
-                    {
-                        printf("Unable to setsockopt TCP_NODELAY: %s\n",
-                               strerror(errno));
-                        abort();
-                    }
-                    open_session(newfd);
-                }
-                else
-#endif
-                {
-                    /* handle an existing connection */
-                    char c;
-                    ssize_t result = read(i, &c, 1);
-                    if (result == 0)
-                    {
-                        close_session(get_session(i));
-                    }
-                    else
-                    {
-                        decode(c, get_session(i));
-                    }
-                }
-            }
-        }
-    }
-
-    return NULL;
-}
-

@@ -15,7 +15,11 @@ CC = clang
 CXX = clang++
 AR = llvm-ar
 LD = clang++
-OBJDUMP = llvm-objdump
+
+# llvm-objdump is not 100% compatible with GCC conventions.  It turns out that
+# newer versionf of llvm remove the -symbolize option causing errors.  For
+# now, we just disable OBJDUMP for the llvm target.
+OBJDUMP = #llvm-objdump
 
 OBJDUMPOPTS=-symbolize 
 
@@ -35,8 +39,8 @@ CXXFLAGS = $(CSHAREDFLAGS) -std=c++0x -D__STDC_FORMAT_MACROS \
            -D__STDC_LIMIT_MACROS #-D__LINEAR_MAP__
 
 LDFLAGS = -g $(ARCHSELECT) -Wl,-Map="$(@:%=%.map)"
-SYSLIB_SUBDIRS += console
-SYSLIBRARIES = -lrt -lpthread -lconsole
+SYSLIB_SUBDIRS +=
+SYSLIBRARIES = -lrt -lpthread
 
 EXTENTION =
 

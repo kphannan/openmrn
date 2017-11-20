@@ -45,6 +45,7 @@ namespace dcc
 class RailcomPrintfFlow : public dcc::RailcomHubPortInterface
 {
 public:
+    /// Constructor. @param source is the railcom hub to listen to.
     RailcomPrintfFlow(dcc::RailcomHubFlow *source)
         : parent_(source)
     {
@@ -57,6 +58,9 @@ public:
     }
 
 private:
+    /// Helper function to turn some railcom data into string. @param data is
+    /// the pointer to the data. @param len tells how many bytes are there
+    /// valid. @return textual representation of that data (debugging).
     string display_railcom_data(const uint8_t *data, int len)
     {
         static char buf[200];
@@ -97,6 +101,10 @@ private:
         return string(buf, ofs);
     }
 
+    /// Incoming railcom data.
+    ///
+    /// @param d railcom buffer.
+    /// @param prio priority
     void send(Buffer<dcc::RailcomHubData> *d, unsigned prio) OVERRIDE
     {
         AutoReleaseBuffer<dcc::RailcomHubData> rb(d);
@@ -117,12 +125,13 @@ private:
         }
     }
 
+    /// Flow to which we are registered.
     dcc::RailcomHubFlow *parent_;
 };
 
 } // namespace dcc
 
-namespace nmranet
+namespace openlcb
 {
 
 /** This flow proxies all incoming railcom traffic to the openlcb bus in
@@ -183,7 +192,7 @@ public:
             get_allocation_result(node_->iface()->global_message_write_flow());
 
         b->data()->reset(
-            static_cast<nmranet::Defs::MTI>(nmranet::Defs::MTI_XPRESSNET + 2),
+            static_cast<openlcb::Defs::MTI>(openlcb::Defs::MTI_XPRESSNET + 2),
             node_->node_id(), string());
         b->data()->payload.push_back(message()->data()->channel | 0x10);
         b->data()->payload.append(
@@ -213,7 +222,7 @@ public:
             get_allocation_result(node_->iface()->global_message_write_flow());
 
         b->data()->reset(
-            static_cast<nmranet::Defs::MTI>(nmranet::Defs::MTI_XPRESSNET + 3),
+            static_cast<openlcb::Defs::MTI>(openlcb::Defs::MTI_XPRESSNET + 3),
             node_->node_id(), string());
         b->data()->payload.push_back(message()->data()->channel | 0x20);
         b->data()->payload.append(
@@ -228,6 +237,6 @@ public:
     dcc::RailcomHubPort *occupancyPort_;
 };
 
-} // namespace nmranet
+} // namespace openlcb
 
 #endif // _DCC_RAILCOMPORTDEBUG_HXX

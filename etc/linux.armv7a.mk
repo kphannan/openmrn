@@ -1,20 +1,24 @@
+# Get the toolchain paths for openmrn
+include $(OPENMRNPATH)/etc/path.mk
+
+
 ifndef TOOLPATH
-TOOLPATHCOMMAND := $(shell \
-sh -c "which arm-linux-gnueabihf-gcc" \
-)
-TOOLPATH := $(dir $(TOOLPATHCOMMAND))
+#TOOLPATHCOMMAND := $(shell \
+#sh -c "which arm-linux-gnueabihf-gcc" \
+#)
+TOOLPATH := $(ARMLINUXGCCPATH)
 endif
 
-$(info mach toolpath '$(TOOLPATH)')
+$(info armv7alinux toolpath '$(TOOLPATH)')
 
 # Get the $(CFLAGSENV), $(CXXFLAGSENV), $(LDFLAGSENV)
 include $(OPENMRNPATH)/etc/env.mk
 
-CC = arm-linux-gnueabihf-gcc
-CXX = arm-linux-gnueabihf-g++
-AR = arm-linux-gnueabihf-ar
-LD = arm-linux-gnueabihf-g++
-OBJDUMP = arm-linux-gnueabihf-objdump
+CC = $(TOOLPATH)/arm-linux-gnueabihf-gcc
+CXX = $(TOOLPATH)/arm-linux-gnueabihf-g++
+AR = $(TOOLPATH)/arm-linux-gnueabihf-ar
+LD = $(TOOLPATH)/arm-linux-gnueabihf-g++
+OBJDUMP = $(TOOLPATH)/arm-linux-gnueabihf-objdump
 
 AROPTS=D
 
@@ -34,8 +38,8 @@ CXXFLAGS = $(CSHAREDFLAGS) -std=c++0x -D__STDC_FORMAT_MACROS \
            -D__STDC_LIMIT_MACROS -D__USE_LIBSTDCPP__
 
 LDFLAGS = $(ARCHOPTIMIZATION) -Wl,-Map="$(@:%=%.map)"
-SYSLIB_SUBDIRS += console
-SYSLIBRARIES = -lrt -lpthread -lconsole
+SYSLIB_SUBDIRS +=
+SYSLIBRARIES = -lrt -lpthread
 
 EXTENTION =
 

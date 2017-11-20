@@ -34,6 +34,8 @@
 #include <new>
 #include <cstdint>
 
+#define TIVADCC_TIVA
+
 #include "inc/hw_types.h"
 #include "inc/hw_memmap.h"
 #include "inc/hw_ints.h"
@@ -48,7 +50,6 @@
 #include "os/OS.hxx"
 #include "utils/Charlieplex.hxx"
 #include "TivaDev.hxx"
-#include "TivaDCC.hxx"
 #include "TivaEEPROMEmulation.hxx"
 #include "DummyGPIO.hxx"
 #include "hardware.hxx"
@@ -57,6 +58,7 @@
 #include "custom/TivaGNDControl.hxx"
 #include "custom/TivaDAC.hxx"
 #include "bootloader_hal.h"
+//#include "TivaDCC.hxx"
 
 
 /*struct Debug {
@@ -104,6 +106,26 @@ const uint32_t RailcomDefs::UART_PERIPH[] = RAILCOM_PERIPH;
 TivaDAC<DACDefs> dac;
 TivaGNDControl gnd_control;
 TivaBypassControl bypass_control;
+
+uint8_t RailcomDefs::feedbackChannel_ = 0xff;
+uint8_t dac_next_packet_mode = 0;
+
+volatile uint32_t ch0_count, ch1_count, sample_count;
+
+DacSettings dac_occupancy = {5, 50, true};  // 1.9 mV
+// DacSettings dac_occupancy = { 5, 10, true };
+
+#if 1
+DacSettings dac_overcurrent = {5, 20, false};
+#else
+DacSettings dac_overcurrent = dac_occupancy;
+#endif
+
+#if 1
+DacSettings dac_railcom = {5, 10, true};  // 8.6 mV
+#else
+DacSettings dac_railcom = dac_occupancy;
+#endif
 
 inline void DCCDecode::dcc_packet_finished_hook() {
   RailcomDefs::set_input();
@@ -267,7 +289,7 @@ void uart1_interrupt_handler(void)
 
 void diewith(uint32_t pattern)
 {
-    vPortClearInterruptMask(0x20);
+    vPortClearInterruptMask(0xA0);
     asm("cpsie i\n");
 
     resetblink(pattern);
@@ -321,8 +343,6 @@ void hw_preinit(void)
     MAP_IntEnable(INT_TIMER4A);
     // Still above kernel but not prio zero
     MAP_IntPrioritySet(INT_TIMER4A, 0x80);
-    MAP_TimerIntEnable(TIMER4_BASE, TIMER_TIMA_TIMEOUT);
-    MAP_TimerEnable(TIMER4_BASE, TIMER_A);
 
     /* Checks the SW1 pin at boot time in case we want to allow for a debugger
      * to connect. */
@@ -335,6 +355,16 @@ void hw_preinit(void)
       }
     } while (blinker_pattern || rest_pattern);
     asm volatile ("cpsid i\n");
+}
+
+/** Initialize the processor hardware.
+ */
+void hw_postinit(void)
+{
+    // Enables charlieplexing interrupt only after the static initialization
+    // has created the object itself.
+    MAP_TimerIntEnable(TIMER4_BASE, TIMER_TIMA_TIMEOUT);
+    MAP_TimerEnable(TIMER4_BASE, TIMER_A);
 }
 
 }

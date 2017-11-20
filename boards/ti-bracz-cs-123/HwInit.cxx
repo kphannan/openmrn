@@ -34,6 +34,8 @@
 #include <new>
 #include <cstdint>
 
+#define TIVADCC_TIVA
+
 #include "inc/hw_types.h"
 #include "inc/hw_memmap.h"
 #include "inc/hw_ints.h"
@@ -48,22 +50,12 @@
 #include "TivaDev.hxx"
 #include "hardware.hxx"
 #include "DccHardware.hxx"
-#include "TivaDCC.hxx"
 #include "DummyGPIO.hxx"
 #include "TivaEEPROMEmulation.hxx"
 
-struct Debug {
-  // High between start_cutout and end_cutout from the TivaRailcom driver.
-  typedef DummyPin RailcomDriverCutout;
-  // Flips every time an uart byte is received error.
-  typedef DummyPin RailcomError;
-  // Flips every time an 'E0' byte is received in the railcom driver.
-  typedef DummyPin RailcomE0;
-  typedef DummyPin RailcomDataReceived;
-  typedef DummyPin RailcomAnyData;
-  typedef DummyPin RailcomPackets;
-};
+
 #include "TivaRailcom.hxx"
+#include "TivaDCC.hxx"
 
 
 /** override stdin */
@@ -209,6 +201,12 @@ void disable_dcc() {
     dcc_hw.disable_output();
     g_dcc_on = false;
     MAP_GPIOPinWrite(LED_BLUE, 0);
+}
+
+void setshorted_dcc() {
+    g_dcc_on = false;
+    MAP_GPIOPinWrite(LED_BLUE, 0);
+    dcc_hw.output_set_shorted();
 }
 
 bool query_dcc() {
