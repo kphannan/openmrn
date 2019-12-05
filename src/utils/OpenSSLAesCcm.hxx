@@ -73,8 +73,8 @@ void CCMEncrypt(const std::string &aes_key, const std::string &iv,
     const std::string &auth_data, const std::string &plain, std::string *cipher,
     std::string *tag)
 {
-    ASSERT_EQ(32, aes_key.size());
-    ASSERT_EQ(11, iv.size());
+    ASSERT_EQ(32u, aes_key.size());
+    ASSERT_EQ(11u, iv.size());
 
     EVP_CIPHER_CTX *ctx;
     ctx = EVP_CIPHER_CTX_new();
@@ -107,7 +107,7 @@ void CCMEncrypt(const std::string &aes_key, const std::string &iv,
     LOG(INFO, "encupdate: in=%d, ret=%d", (int)plain.size(), outlen);
     cipher->resize(outlen);
     // CCM always outputs the same number of bytes than the input.
-    ASSERT_EQ(plain.size(), outlen);
+    ASSERT_EQ((int)plain.size(), outlen);
     int ret = -1;
     ASSERT_EQ(1, EVP_EncryptFinal_ex(ctx, (uint8_t *)&((*cipher)[0]), &ret));
     ASSERT_EQ(0, ret);
@@ -118,5 +118,31 @@ void CCMEncrypt(const std::string &aes_key, const std::string &iv,
 
     EVP_CIPHER_CTX_free(ctx);
 }
+
+/// Helper class to do hashing algorithms via OpenSSL library.
+class MD
+{
+public:
+    /// Computes a SHA256 hash of a given data payload.
+    /// @param data pointer to the beginning of the data to be hashed.
+    /// @param len the number of bytes to be hashed
+    /// @return SHA256 hash (32 bytes long).
+    static std::string SHA256(const void *data, size_t len)
+    {
+        EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+        std::string ret(32, 0);
+        EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL);
+        EVP_DigestUpdate(mdctx, data, len);
+        unsigned int md_len;
+        EVP_DigestFinal_ex(mdctx, (uint8_t *)&ret[0], &md_len);
+        HASSERT(md_len == 32);
+        EVP_MD_CTX_free(mdctx);
+        return ret;
+    }
+
+private:
+    /// This class cannot be instantiated.
+    MD();
+};
 
 #endif // _UTILS_OPENSSLAESCCM_HXX_

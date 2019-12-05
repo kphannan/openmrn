@@ -19,7 +19,6 @@ namespace openlcb
 
 /*static*/
 EventService *EventService::instance = nullptr;
-static AsyncMutex event_caller_mutex;
 
 EventService::EventService(ExecutorBase *e) : Service(e)
 {
@@ -70,20 +69,19 @@ EventService::Impl::~Impl()
 
 StateFlowBase::Action EventCallerFlow::entry()
 {
-    return allocate_and_call(STATE(perform_call), &event_caller_mutex);
-}
-
-StateFlowBase::Action EventCallerFlow::perform_call()
-{
-    n_.reset(this);
     EventHandlerCall *c = message()->data();
+    if (c->epoch != EventRegistry::instance()->get_epoch())
+    {
+        // Event registry was invalidated since this call was scheduled. Ignore.
+        return call_immediately(STATE(call_done));
+    }
+    n_.reset(this);
     (c->registry_entry->handler->*(c->fn))(*c->registry_entry, c->rep, &n_);
     return wait_and_call(STATE(call_done));
 }
 
 StateFlowBase::Action EventCallerFlow::call_done()
 {
-    event_caller_mutex.Unlock();
     return release_and_exit();
 }
 
@@ -251,7 +249,6 @@ StateFlowBase::Action EventIteratorFlow::iterate_next()
     EventRegistryEntry *entry = iterator_->next_entry();
     if (!entry)
     {
-        no_more_matches();
         if (incomingDone_)
         {
             incomingDone_->notify();
@@ -285,7 +282,7 @@ StateFlowBase::Action EventIteratorFlow::dispatch_event(const EventRegistryEntry
      * made fixed size. */
     eventService_->impl()->callerFlow_.pool()->alloc(&b, nullptr);
     HASSERT(b);
-    b->data()->reset(entry, &eventReport_, fn_);
+    b->data()->reset(entry, eventRegistryEpoch_, &eventReport_, fn_);
     n_.reset(this);
     b->set_done(&n_);
     eventService_->impl()->callerFlow_.send(b, priority());
@@ -296,28 +293,11 @@ StateFlowBase::Action
 InlineEventIteratorFlow::dispatch_event(const EventRegistryEntry *entry)
 {
     currentEntry_ = entry;
-    if (!holdingEventMutex_)
+    if (eventRegistryEpoch_ != eventService_->impl()->registry->get_epoch())
     {
-        holdingEventMutex_ = true; // will be true when we get called again
-        return allocate_and_call(STATE(perform_call), &event_caller_mutex);
+        // Will restart iteration.
+        return call_immediately(STATE(iterate_next));
     }
-    else
-    {
-        return perform_call();
-    }
-}
-
-void InlineEventIteratorFlow::no_more_matches()
-{
-    if (holdingEventMutex_)
-    {
-        event_caller_mutex.Unlock();
-        holdingEventMutex_ = false;
-    }
-}
-
-StateFlowBase::Action InlineEventIteratorFlow::perform_call()
-{
     n_.reset(this);
     // It is required to hold on to a child to call abort_if_almost_done.
     auto *c = n_.new_child();

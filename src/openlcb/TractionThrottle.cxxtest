@@ -160,7 +160,7 @@ TEST_F(ThrottleTest, SendAssignRelease)
     wait();
     EXPECT_EQ(0, flow.response()->resultCode);
     actual_ctrl_id = trainNode_->get_controller().id;
-    EXPECT_EQ(0, actual_ctrl_id);
+    EXPECT_EQ(0u, actual_ctrl_id);
 
     wait();
 }
@@ -282,8 +282,8 @@ TEST_F(ThrottleClientTest, SendConsistAddDel)
         &throttle_, TractionThrottleCommands::CONSIST_ADD, n2, 0x42);
     EXPECT_EQ(0, b->data()->resultCode);
     EXPECT_EQ(2, trainNode_->query_consist_length());
-    EXPECT_QRYCONSIST(n2, 0x42, 0);
-    EXPECT_QRYCONSIST(n1, 0x5A, 1);
+    EXPECT_QRYCONSIST(n1, 0x5A, 0);
+    EXPECT_QRYCONSIST(n2, 0x42, 1);
 
     b = invoke_flow(
         &throttle_, TractionThrottleCommands::CONSIST_DEL, n1);
@@ -341,34 +341,34 @@ TEST_F(ThrottleClientTest, SendConsistQry)
     EXPECT_EQ(0, b->data()->resultCode);
     EXPECT_EQ(1, b->data()->consistCount);
     EXPECT_EQ(0xff, b->data()->consistIndex);
-    EXPECT_EQ(0, b->data()->dst);
+    EXPECT_EQ(0u, b->data()->dst);
 
     b = invoke_flow(
         &throttle_, TractionThrottleCommands::CONSIST_ADD, n2, 0x42);
     EXPECT_EQ(0, b->data()->resultCode);
     EXPECT_EQ(2, trainNode_->query_consist_length());
-    EXPECT_QRYCONSIST(n2, 0x42, 0);
-    EXPECT_QRYCONSIST(n1, 0x5A, 1);
+    EXPECT_QRYCONSIST(n1, 0x5A, 0);
+    EXPECT_QRYCONSIST(n2, 0x42, 1);
 
     b = invoke_flow(&throttle_, TractionThrottleCommands::CONSIST_QRY, 1);
     EXPECT_EQ(0, b->data()->resultCode);
     EXPECT_EQ(2, b->data()->consistCount);
     EXPECT_EQ(1, b->data()->consistIndex);
-    EXPECT_EQ(0x5A, b->data()->flags);
-    EXPECT_EQ(n1, b->data()->dst);
+    EXPECT_EQ(0x42, b->data()->flags);
+    EXPECT_EQ(n2, b->data()->dst);
 
     b = invoke_flow(&throttle_, TractionThrottleCommands::CONSIST_QRY, 0);
     EXPECT_EQ(0, b->data()->resultCode);
     EXPECT_EQ(2, b->data()->consistCount);
     EXPECT_EQ(0, b->data()->consistIndex);
-    EXPECT_EQ(0x42, b->data()->flags);
-    EXPECT_EQ(n2, b->data()->dst);
+    EXPECT_EQ(0x5A, b->data()->flags);
+    EXPECT_EQ(n1, b->data()->dst);
 
     b = invoke_flow(&throttle_, TractionThrottleCommands::CONSIST_QRY, 2);
     EXPECT_EQ(0, b->data()->resultCode);
     EXPECT_EQ(2, b->data()->consistCount);
     EXPECT_EQ(0xff, b->data()->consistIndex);
-    EXPECT_EQ(0, b->data()->dst);
+    EXPECT_EQ(0u, b->data()->dst);
 }
 
 TEST_F(ThrottleClientTest, SendSelfConsist)
@@ -512,6 +512,18 @@ TEST_F(ThrottleClientTest, ListenerCallback)
     wait();
     Mock::VerifyAndClear(&l);
     EXPECT_EQ(1, throttle_.get_fn(10));
+
+    // Test with emergency stop as well.
+    EXPECT_CALL(l, update(-1));
+    EXPECT_FALSE(throttle_.get_emergencystop());
+    send_packet(":X195EB330N077102;"); // E-Stop
+    wait();
+    Mock::VerifyAndClear(&l);
+    EXPECT_TRUE(throttle_.get_emergencystop());
+
+    // send another speed command to verify that E-Stop gets cleared
+    throttle_.set_speed(v);
+    EXPECT_FALSE(throttle_.get_emergencystop());
 }
 
 } // namespace openlcb

@@ -39,7 +39,7 @@ flash: $(EXECUTABLE)$(EXTENTION) $(EXECUTABLE).lst
 
 gdb:
 	@if ps ax -o comm | grep -q openocd ; then echo openocd already running. quit existing first. ; exit 1 ; fi
-	$(GDB) $(EXECUTABLE)$(EXTENTION) -ex "target remote | $(OPENOCDPATH)/openocd -c \"gdb_port pipe\" --search $(OPENOCDSCRIPTSPATH) $(OPENOCDARGS)" -ex "monitor reset halt"
+	$(GDB) $(EXECUTABLE)$(EXTENTION) -ex "target remote | $(OPENOCDPATH)/openocd -c \"gdb_port pipe\" --search $(OPENOCDSCRIPTSPATH) $(OPENOCDARGS)" -ex "continue" # -ex "monitor reset halt"
 
 
 else
@@ -56,10 +56,16 @@ endif
 ifndef ADDRESS
 ADDRESS=0x62
 endif
+ADDRHIGH ?=0x14
+ifndef ADDRHIGH
+ADRTEXT+=;\#define NODEID_HIGH_BITS $(ADDRHIGH)
+endif
 
 rflash: $(EXECUTABLE).bin
-	$(OPENMRNPATH)/applications/bootloader_client/targets/linux.x86/bootloader_client -c tiva123 -r -n 0x0501010114$$(printf %02x $(ADDRESS)) -f $<
+	$(MAKE) -C $(OPENMRNPATH)/applications/bootloader_client/targets/linux.x86/
+	$(OPENMRNPATH)/applications/bootloader_client/targets/linux.x86/bootloader_client -c tiva123 -r -n 0x05010101$$(printf %02x $(ADDRHIGH))$$(printf %02x $(ADDRESS)) -f $<
 
 
 package: $(EXECUTABLE).bin
+	$(MAKE) -C $(OPENMRNPATH)/applications/bootloader_client/targets/linux.x86/
 	$(OPENMRNPATH)/applications/bootloader_client/targets/linux.x86/bootloader_client -c tiva123 -f $< -D $(EXECUTABLE).upload

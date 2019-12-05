@@ -40,6 +40,7 @@
 
 #include <fcntl.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include "utils/logging.h"
 
 /** This class creates a temporary directory for the test, and removes it when
@@ -51,21 +52,14 @@
 class TempDir {
 public:
 #ifndef __FreeRTOS__
-  TempDir() {
-#ifdef __linux__
-    dirName_ = "/tmp/openmrntmpdirXXXXXX";
-#else
-    dirName_ = "./openmrntmpdirXXXXXX";
-#endif
-    dirName_.c_str();
-    HASSERT(mkdtemp(&dirName_[0]));
-  }
+  TempDir();
 #endif
 
   ~TempDir() {
-    if (rmdir(dirName_.c_str()) != 0) {
-      LOG(WARNING, "Error deleting temporary directory %s: %s",
-          dirName_.c_str(), strerror(errno));
+      if (::rmdir(dirName_.c_str()) != 0)
+      {
+          LOG(WARNING, "Error deleting temporary directory %s: %s",
+              dirName_.c_str(), strerror(errno));
     }
   }
 
@@ -93,11 +87,7 @@ public:
     /// @param dir isthe temp directory to create the file within.
     /// @param basename will be the prefix of the name. A unique suffix will be
     /// appended for each file.
-  TempFile(const TempDir& dir, const string& basename) {
-    fileName_ = dir.name() + "/" + basename + ".XXXXXX";
-    fileName_.c_str();
-    fd_ = mkstemp((char*)fileName_.c_str());
-  }
+  TempFile(const TempDir& dir, const string& basename);
 
   ~TempFile() {
     ::close(fd_);
@@ -139,7 +129,9 @@ public:
       HASSERT(ret >= 0);
       ofs += ret;
     }
+#ifndef __WINNT__    
     fsync(fd_);
+#endif    
   }
 
 private:

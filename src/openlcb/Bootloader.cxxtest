@@ -46,7 +46,7 @@ public:
 
 static MockBootloaderHAL *g_mock_bootloader_hal = nullptr;
 
-#define FLASH_SIZE 13 * 1024
+#define FLASH_SIZE 13 * 1024u
 static uint8_t virtual_flash[FLASH_SIZE];
 #define APP_HEADER_OFFSET 131 * 4
 
@@ -54,7 +54,7 @@ BootloaderPort *g_bootloader_port = nullptr;
 
 extern "C" {
 
-extern unsigned g_bootloader_busy;
+extern volatile unsigned g_bootloader_busy;
 
 void bootloader_led(enum BootloaderLed led, bool value)
 {
@@ -899,9 +899,7 @@ TEST_F(BootloaderClientTest, WriteSmallData)
     //print_all_packets();
     expect_any_packet();
     startup();
-    // TODO: we should wait for the first startup to complete correctly and
-    // only after that add the following expectation. Otherwise there is a race
-    // condition on which startup this patcher matches.
+    wait();
     expect_packet(":X191004AAN1A2A3A4A5A6A;");
 
     request_->data()->dst.id = 0x1A2A3A4A5A6A;

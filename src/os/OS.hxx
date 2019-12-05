@@ -95,24 +95,81 @@ public:
     void inherit()
     {
         HASSERT(!is_created());
-        handle = os_thread_self();
+        ScopedSetThreadHandle h(this);
         entry();
-        handle = 0;
+    }
+
+    /** Return the current thread priority.  Depricated, use get_priority().
+     * @param thread handle to thread of interest
+     * @return current thread priority
+     */
+    static int getpriority(OSThread *thread)
+    {
+        return get_priority(thread);
     }
 
     /** Return the current thread priority.
      * @param thread handle to thread of interest
      * @return current thread priority
      */
-    static int getpriority(OSThread *thread)
+    static int get_priority(OSThread *thread)
     {
-        return os_thread_getpriority(thread->handle);
+        return os_thread_get_priority(thread->handle);
+    }
+
+    /** Get the minimum thread priority.
+     * @return minimum trhead priority
+     */
+    static int get_priority_min()
+    {
+        return os_thread_get_priority_min();
+    }
+
+    /** Get the maximum thread priority.
+     * @return maximum trhead priority
+     */
+    static int get_priority_max()
+    {
+        return os_thread_get_priority_max();
     }
 
     /// @return the thread handle for os_xxx operations.
-    os_thread_t get_handle() {
+    os_thread_t get_handle()
+    {
         return handle;
     }
+
+    /// Sets the thread handle to the current calling thread's. Needed for
+    /// multiplexing environments like Arduino.
+    void lock_to_thread()
+    {
+        HASSERT(handle == 0);
+        handle = os_thread_self();
+    }
+
+    /// Resets the thread handle to none.
+    void unlock_from_thread()
+    {
+        handle = 0;
+    }
+
+    /// Helper class for using lock_to_thread.
+    struct ScopedSetThreadHandle
+    {
+        ScopedSetThreadHandle(OSThread *parent)
+            : parent_(parent)
+        {
+            parent_->lock_to_thread();
+        }
+
+        ~ScopedSetThreadHandle()
+        {
+            parent_->unlock_from_thread();
+        }
+
+    private:
+        OSThread *parent_;
+    };
 
 protected:
     /** User entry point for the created thread.
@@ -205,7 +262,7 @@ public:
     }
 
 
-#if defined (__FreeRTOS__)
+#if OPENMRN_FEATURE_RTOS_FROM_ISR
     /** Post (increment) a semaphore from ISR context.
      * @param woken is the task woken up
      */
@@ -213,7 +270,7 @@ public:
     {
         os_sem_post_from_isr(&handle, woken);
     }
-#endif
+#endif // OPENMRN_FEATURE_RTOS_FROM_ISR
 
 
     /** Wait on (decrement) a semaphore.
@@ -223,7 +280,7 @@ public:
         os_sem_wait(&handle);
     }
 
-#ifndef ESP_NONOS
+#if OPENMRN_FEATURE_SEM_TIMEDWAIT
     /** Wait on (decrement) a semaphore with timeout condition.
      * @param timeout timeout in nanoseconds, else OPENMRN_OS_WAIT_FOREVER to wait forever
      * @return 0 upon success, else -1 with errno set to indicate error
@@ -675,6 +732,42 @@ private:
     /** handle to event object */
     EventGroupHandle_t event;
 };
+#elif defined(ARDUINO)
+
+typedef uint32_t OSEventType;
+
+extern "C" {
+extern unsigned critical_nesting;
+extern uint32_t SystemCoreClock;
+}
+#define cm3_cpu_clock_hz SystemCoreClock
+
+#if !defined(ESP32)
+
+#define portENTER_CRITICAL()                                                   \
+    do                                                                         \
+    {                                                                          \
+        noInterrupts();                                                        \
+        ++critical_nesting;                                                    \
+    } while (0)
+#define portEXIT_CRITICAL()                                                    \
+    do                                                                         \
+    {                                                                          \
+        if (critical_nesting <= 1)                                             \
+        {                                                                      \
+            critical_nesting = 0;                                              \
+            interrupts();                                                      \
+        }                                                                      \
+        else                                                                   \
+        {                                                                      \
+            --critical_nesting;                                                \
+        }                                                                      \
+    } while (0)
+
+#define configKERNEL_INTERRUPT_PRIORITY (0xa0)
+
+#endif // ESP32
+
 #endif  // freertos
 
 #endif /* _OS_OS_HXX_ */

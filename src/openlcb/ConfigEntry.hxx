@@ -92,7 +92,8 @@ class ConfigEntryBase : public ConfigReference
 public:
     INHERIT_CONSTEXPR_CONSTRUCTOR(ConfigEntryBase, ConfigReference)
 
-    static constexpr GroupConfigOptions group_opts()
+    template<typename... Args>
+    static constexpr GroupConfigOptions group_opts(Args... args)
     {
         return GroupConfigOptions();
     }
@@ -191,6 +192,47 @@ public:
         return be64toh(d);
     }
 
+    /// Performs endian conversion.
+    ///
+    /// @param d network-byte-order data
+    ///
+    /// @return host-byte-order data
+    ///
+    static int8_t endian_convert(int8_t d)
+    {
+        return d;
+    }
+    /// Performs endian conversion.
+    ///
+    /// @param d network-byte-order data
+    ///
+    /// @return host-byte-order data
+    ///
+    static int16_t endian_convert(int16_t d)
+    {
+        return be16toh(d);
+    }
+    /// Performs endian conversion.
+    ///
+    /// @param d network-byte-order data
+    ///
+    /// @return host-byte-order data
+    ///
+    static int32_t endian_convert(int32_t d)
+    {
+        return be32toh(d);
+    }
+    /// Performs endian conversion.
+    ///
+    /// @param d network-byte-order data
+    ///
+    /// @return host-byte-order data
+    ///
+    static int64_t endian_convert(int64_t d)
+    {
+        return be64toh(d);
+    }
+
     /// Storage bytes occupied by the instance in the config file.
     ///
     /// @return number of bytes that the config parser offset will be
@@ -222,6 +264,27 @@ public:
         return endian_convert(raw_read<TR>(fd));
     }
 
+    /// Reads data from configuration file obeying a specific trimming. If the
+    /// value violates the trimming constraints, the configuration file will be
+    /// overwritten with a trimmed value.
+    ///
+    /// @param fd the descriptor of the config file.
+    /// @param min_value minimum acceptable value
+    /// @param max_value maximum acceptable value
+    /// @return current value after trimming.
+    TR read_or_write_trimmed(int fd, TR min_value, TR max_value) {
+        TR value = read(fd);
+        if (value < min_value) {
+            value = min_value;
+            write(fd, value);
+        }
+        if (value > max_value) {
+            value = max_value;
+            write(fd, value);
+        }
+        return value;
+    }
+    
     /// Writes the data to the configuration file.
     ///
     /// @param fd file descriptor of the config file.
@@ -234,14 +297,23 @@ public:
     }
 };
 
-/// Numeric config entry with 1 byte width.
+/// Unsigned numeric config entry with 1 byte width.
 using Uint8ConfigEntry = NumericConfigEntry<uint8_t>;
-/// Numeric config entry with 2 bytes width.
+/// Unsigned numeric config entry with 2 bytes width.
 using Uint16ConfigEntry = NumericConfigEntry<uint16_t>;
-/// Numeric config entry with 4 bytes width.
+/// Unsigned numeric config entry with 4 bytes width.
 using Uint32ConfigEntry = NumericConfigEntry<uint32_t>;
-/// Numeric config entry with 8 bytes width.
+/// Unsigned numeric config entry with 8 bytes width.
 using Uint64ConfigEntry = NumericConfigEntry<uint64_t>;
+
+/// Signed numeric config entry with 1 byte width.
+using Int8ConfigEntry = NumericConfigEntry<int8_t>;
+/// Signed numeric config entry with 2 bytes width.
+using Int16ConfigEntry = NumericConfigEntry<int16_t>;
+/// Signed numeric config entry with 4 bytes width.
+using Int32ConfigEntry = NumericConfigEntry<int32_t>;
+/// Signed numeric config entry with 8 bytes width.
+using Int64ConfigEntry = NumericConfigEntry<int64_t>;
 
 /// Implementation class for event ID configuration entries.
 class EventConfigEntry : public Uint64ConfigEntry

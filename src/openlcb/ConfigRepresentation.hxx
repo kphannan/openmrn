@@ -107,6 +107,7 @@ public:
     using Offset = GroupConfigOptions::Offset;
     using RepName = GroupConfigOptions::RepName;
     using FixedSize = GroupConfigOptions::FixedSize;
+    using Hidden = GroupConfigOptions::Hidden;
     using Manufacturer = IdentificationConfigOptions::Manufacturer;
     using Model = IdentificationConfigOptions::Model;
     using HwVersion = IdentificationConfigOptions::HwVersion;
@@ -135,9 +136,10 @@ public:
         {                                                                      \
             return openlcb::GroupBaseEntry(offset_);                           \
         }                                                                      \
-        static constexpr openlcb::GroupConfigOptions group_opts()              \
+        template <typename... Args>                                            \
+        static constexpr openlcb::GroupConfigOptions group_opts(Args... args)  \
         {                                                                      \
-            return openlcb::GroupConfigOptions(ARGS);                          \
+            return openlcb::GroupConfigOptions(args..., ##ARGS);               \
         }                                                                      \
         static constexpr unsigned size()                                       \
         {                                                                      \
@@ -189,18 +191,18 @@ public:
 #define CDI_GROUP_ENTRY_HELPER(LINE, NAME, TYPE, ...)                          \
     constexpr TYPE entry(const openlcb::EntryMarker<LINE> &) const             \
     {                                                                          \
-        static_assert(                                                         \
-            !group_opts().is_cdi() || TYPE(0).group_opts().is_segment(),       \
+        static_assert(!group_opts().is_cdi() ||                                \
+                TYPE(0).group_opts(__VA_ARGS__).is_segment(),                  \
             "May only have segments inside CDI.");                             \
         return TYPE(group_opts().is_cdi()                                      \
-                ? TYPE(0).group_opts().get_segment_offset()                    \
+                ? TYPE(0).group_opts(__VA_ARGS__).get_segment_offset()         \
                 : entry(openlcb::EntryMarker<LINE - 1>()).end_offset());       \
     }                                                                          \
     constexpr TYPE NAME() const                                                \
     {                                                                          \
         return entry(openlcb::EntryMarker<LINE>());                            \
     }                                                                          \
-    static constexpr decltype(                                                 \
+    static constexpr typename decltype(                                        \
         TYPE::config_renderer())::OptionsType NAME##_options()                 \
     {                                                                          \
         return decltype(TYPE::config_renderer())::OptionsType(__VA_ARGS__);    \
@@ -272,6 +274,29 @@ public:
 
 /// Closes a CDI group structure definition.
 #define CDI_GROUP_END() CDI_GROUP_END_HELPER(__LINE__)
+
+/// Performs factory reset on a CDI variable. The variable must have a default
+/// value defined. Usage:
+///     CDI_FACTORY_RESET(opts_.short_retry_delay);
+/// assuming that there is something like
+///   CDI_GROUP_ENTRY(short_retry_delay, Uint8ConfigEntry, Default(13));
+/// in the CDI group whose type opts_ is, and there is a local variable `fd` for
+/// writing to the configuration file.
+/// Will generate compile error if the variable does not have a default value
+/// in the configuration group entry.
+#define CDI_FACTORY_RESET(PATH)                                                \
+    PATH().write(fd, PATH##_options().defaultvalue())
+
+/// Requests a readout of a numeric variable with trimming. If the value
+/// currently present in the config file is less than the defined minimum, then
+/// sets the value to the minimum in the config file (overwriting), same for
+/// max. Returns the current value after trimming.
+///
+/// Usage:
+///   uint16_t my_value = CDI_READ_TRIMMED(cfg.seg().foo_bar, fd);
+#define CDI_READ_TRIMMED(PATH, fd)                                             \
+    PATH().read_or_write_trimmed(                                              \
+        fd, PATH##_options().minvalue(), PATH##_options().maxvalue())
 
 /// Defines a repeated group of a given type and a given number of repeats.
 ///
@@ -358,7 +383,8 @@ class ToplevelEntryBase : public ConfigEntryBase
 public:
     using base_type = ConfigEntryBase;
     INHERIT_CONSTEXPR_CONSTRUCTOR(ToplevelEntryBase, base_type)
-    static constexpr GroupConfigOptions group_opts()
+    template<typename... Args>
+    static constexpr GroupConfigOptions group_opts(Args... args)
     {
         return GroupConfigOptions(GroupConfigOptions::Segment(1000));
     }
@@ -406,12 +432,12 @@ CDI_GROUP(
     UserInfoSegment, Segment(MemoryConfigDefs::SPACE_ACDI_USR), Offset(1));
 /// User name entry
 CDI_GROUP_ENTRY(name, StringConfigEntry<63>, //
-    Name("User name"),                       //
+    Name("User Name"),                       //
     Description(
         "This name will appear in network browsers for the current node."));
 /// User description entry
 CDI_GROUP_ENTRY(description, StringConfigEntry<64>, //
-    Name("User description"),                       //
+    Name("User Description"),                       //
     Description("This description will appear in network browsers for the "
                 "current node."));
 /// Signals termination of the group.

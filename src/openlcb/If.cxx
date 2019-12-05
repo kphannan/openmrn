@@ -34,6 +34,10 @@
 
 #include "openlcb/If.hxx"
 
+/// Ensures that the largest bucket in the main buffer pool is exactly the size
+/// of a GenMessage.
+const unsigned LARGEST_BUFFERPOOL_BUCKET = sizeof(Buffer<openlcb::GenMessage>);
+
 namespace openlcb
 {
 
@@ -74,6 +78,12 @@ void error_to_data(uint16_t error_code, void* data) {
     uint8_t* p = (uint8_t*) data;
     p[0] = error_code >> 8;
     p[1] = error_code & 0xff;
+}
+
+uint16_t data_to_error(const void *data)
+{
+    const uint8_t *p = (const uint8_t *)data;
+    return (((uint16_t)p[0]) << 8) | p[1];
 }
 
 string error_to_buffer(uint16_t error_code, uint16_t mti)
@@ -120,6 +130,15 @@ void buffer_to_error(const Payload &payload, uint16_t *error_code,
         error_message->assign(&payload[4], payload.size() - 4);
     }
 }
+
+void send_event(Node* src_node, uint64_t event_id)
+{
+    auto *b = src_node->iface()->global_message_write_flow()->alloc();
+    b->data()->reset(Defs::MTI_EVENT_REPORT, src_node->node_id(),
+                     eventid_to_buffer(event_id));
+    src_node->iface()->global_message_write_flow()->send(b);
+}
+
 
 string EMPTY_PAYLOAD;
 

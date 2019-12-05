@@ -14,7 +14,9 @@ endif
 include $(OPENMRNPATH)/etc/$(TARGET).mk
 
 include $(OPENMRNPATH)/etc/path.mk
+include $(OPENMRNPATH)/etc/make_utils.mk
 
+GITREPOS += $(OPENMRNPATH)
 
 VPATH = $(abspath ../../)
 
@@ -43,6 +45,16 @@ LIBS = $(STARTGROUP) \
        $(LINKCORELIBS) \
        $(ENDGROUP) \
 
+
+all:
+
+
+# This ensures that link targets that depend on lib/libfoo.a will recurse into
+# the directory foo and rebuild stuff that's there. However, the dependency is
+# phrased in a way that if recursing does not change the library (when it's
+# up-to-date) then the .elf linking is not re-done.
+$(foreach lib,$(LIBDIRS),$(eval $(call DEP_helper_template,lib/lib$(lib).a,build-$(lib))))
+
 CDIEXTRA := -I.
 INCLUDES += -I.
 
@@ -57,6 +69,7 @@ else
 endif
 ifdef BOARD
 INCLUDES += -D$(BOARD)
+CDIEXTRA += -D$(BOARD)
 endif
 CFLAGS += $(INCLUDES)
 CXXFLAGS += $(INCLUDES)
@@ -94,11 +107,21 @@ MKSUBDIR_OPENMRNINCLUDE=applib.mk
 
 ifneq ($(SUBDIRS),)
 include $(OPENMRNPATH)/etc/recurse.mk
+else
+all: mksubdirs
+
+mksubdirs:
+
 endif
 
+# handle the revision metadata
 all: $(EXECUTABLE)$(EXTENTION)
 
 -include *.d
+
+.PHONY: FORCE
+Revision.hxxout: FORCE
+	$(OPENMRNPATH)/bin/revision.py $(REVISIONFLAGS) -t -i "$(GITREPOS)" -g "`$(CC) -dumpversion`"
 
 # This part detects whether we have a config.hxx defining CDI data and if yes,
 # then compiles it into an xml and object file.
@@ -119,13 +142,15 @@ cdi.o : compile_cdi
 compile_cdi: config.hxx $(OPENMRNPATH)/src/openlcb/CompileCdiMain.cxx
 	g++ -o $@ -I. -I$(OPENMRNPATH)/src -I$(OPENMRNPATH)/include $(CDIEXTRA)  --std=c++11 -MD -MF $@.d $(CXXFLAGSEXTRA) $(OPENMRNPATH)/src/openlcb/CompileCdiMain.cxx
 
+config.hxx: Revision.hxxout
+
+$(OBJS): compile_cdi
+
 clean: clean_cdi
 
 .PHONY: clean_cdi
-
 clean_cdi:
-	rm -f cdi.xmlout cdi.nxml cdi.cxxout compile_cdi	
-
+	rm -f cdi.xmlout cdi.nxml cdi.cxxout compile_cdi
 endif
 
 # Makes sure the subdirectory builds are done before linking the binary.
@@ -254,7 +279,7 @@ endif
 clean: clean-local
 
 clean-local:
-	rm -f $(wildcard *.o *.d *.a *.so *.output *.cout *.cxxout *.stripped lib/*.stripped lib/*.lst) $(TESTOBJS:.o=) $(EXECUTABLE)$(EXTENTION) $(EXECUTABLE).bin $(EXECUTABLE).lst $(EXECUTABLE).map cg.debug.txt cg.dot cg.svg gmon.out $(OBJS) demangled.txt $(EXECUTABLE).ndlst objcopy.params
+	rm -f $(wildcard *.o *.d *.a *.so *.output *.cout *.cxxout *.hxxout *.stripped lib/*.stripped lib/*.lst) $(TESTOBJS:.o=) $(EXECUTABLE)$(EXTENTION) $(EXECUTABLE).bin $(EXECUTABLE).lst $(EXECUTABLE).map cg.debug.txt cg.dot cg.svg gmon.out $(OBJS) demangled.txt $(EXECUTABLE).ndlst objcopy.params
 	rm -rf $(XMLSRCS:.xml=.c)
 
 veryclean: clean-local clean

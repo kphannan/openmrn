@@ -49,14 +49,14 @@ ASFLAGS = -c $(ARCHFLAGS)
 CORECFLAGS = $(ARCHFLAGS) -Wall -Werror -Wno-unknown-pragmas \
              -fdata-sections -ffunction-sections \
              -fno-builtin -fno-stack-protector -mfix-cortex-m3-ldrd \
-             -D__FreeRTOS__ -DGCC_ARMCM3 -D_REENT_SMALL
+             -D__FreeRTOS__ -DGCC_ARMCM3 -specs=nano.specs
 
-CFLAGS += -c $(ARCHOPTIMIZATION) $(CORECFLAGS) -std=gnu99 \
+CFLAGS += -c $(ARCHOPTIMIZATION) $(CORECFLAGS) -std=c99 \
           -Wstrict-prototypes -D_REENT_SMALL \
           $(CFLAGSENV) $(CFLAGSEXTRA) \
 
 
-CXXFLAGS += -c $(ARCHOPTIMIZATION) $(CORECFLAGS) -std=gnu++1y  \
+CXXFLAGS += -c $(ARCHOPTIMIZATION) $(CORECFLAGS) -std=c++14  \
             -D_ISOC99_SOURCE -D__STDC_FORMAT_MACROS \
             -fno-exceptions -fno-rtti \
             $(CXXFLAGSENV) $(CXXFLAGSEXTRA) \

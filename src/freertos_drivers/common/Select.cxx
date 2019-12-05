@@ -45,19 +45,34 @@ static OSEvent wakeup;
 static OSEventType get_event()
 {
     static int thread_count = 0;
-    ThreadPriv *priv = (ThreadPriv*)xTaskGetApplicationTaskTag(NULL);
+    OSEventType event =
+#if tskKERNEL_VERSION_MAJOR >= 9
+    /* FreeRTOS 9.x+ implementation */
+        (OSEventType)pvTaskGetThreadLocalStoragePointer(
+        nullptr, TLS_INDEX_SELECT_EVENT_BIT);
+#else
+    /* legacy implementation uses task tag */
+        (OSEventType)xTaskGetApplicationTaskTag(nullptr);
+#endif
 
-    if (priv->selectEventBit == 0)
+    if (event == 0)
     {
         if(thread_count >= OSEvent::number_of_bits())
         {
             thread_count = 0;
         }
-        priv->selectEventBit = 0x1 << thread_count;
+        event = 0x1 << thread_count;
+#if defined (TLS_INDEX_SELECT_EVENT_BIT)
+    /* FreeRTOS 9.x+ implementation */
+        vTaskSetThreadLocalStoragePointer(nullptr, TLS_INDEX_SELECT_EVENT_BIT,
+                                          (void*)event);
+#else
+    /* legacy implementation uses task tag */
+        vTaskSetApplicationTaskTag(nullptr, (void*)event);
+#endif
         ++thread_count;
     }
-
-    return priv->selectEventBit;
+    return event;
 }
 
 void Device::select_clear()
@@ -174,17 +189,6 @@ int Device::select(int nfds, fd_set *readfds, fd_set *writefds,
             wakeup.wait(event, NULL, true, OSEvent::WAIT_ANY);
         }
     }
-}
-
-/** Device select method. Default impementation returns true.
- * @param file reference to the file
- * @param mode FREAD for read active, FWRITE for write active, 0 for
- *        exceptions
- * @return true if active, false if inactive
- */
-bool Device::select(File* file, int mode)
-{
-    return true;
 }
 
 /** Add client to list of clients needing woken,

@@ -49,6 +49,11 @@ struct TractionThrottleInput;
 /// TractionThrottle flow.
 struct TractionThrottleCommands
 {
+    enum SetDst
+    {
+        SET_DST,
+    };
+
     enum AssignTrain
     {
         ASSIGN_TRAIN,
@@ -87,6 +92,7 @@ struct TractionThrottleInput : public CallableFlowRequestBase
 {
     enum Command
     {
+        CMD_SET_DST,
         CMD_ASSIGN_TRAIN,
         CMD_RELEASE_TRAIN,
         CMD_LOAD_STATE,
@@ -94,6 +100,14 @@ struct TractionThrottleInput : public CallableFlowRequestBase
         CMD_CONSIST_DEL,
         CMD_CONSIST_QRY,
     };
+
+    /// Sets the destination node to send messages to without sending assign
+    /// commands to that train node.
+    void reset(const TractionThrottleCommands::SetDst &, const NodeID &dst)
+    {
+        cmd = CMD_SET_DST;
+        this->dst = dst;
+    }
 
     void reset(const TractionThrottleCommands::AssignTrain &, const NodeID &dst,
         bool listen)
@@ -203,7 +217,10 @@ public:
         clear_cache();
     }
 
-    ~TractionThrottle() {
+    ~TractionThrottle()
+    {
+        iface()->dispatcher()->unregister_handler_all(&listenReplyHandler_);
+        iface()->dispatcher()->unregister_handler_all(&speedReplyHandler_);
     }
 
     using Command = TractionThrottleInput::Command;
@@ -218,12 +235,14 @@ public:
         /// Upon a load state request, how far do we go into the function list?
         MAX_FN_QUERY = 28,
         ERROR_UNASSIGNED = 0x4000000,
+        ERROR_ASSIGNED = 0x4010000,
     };
 
     void set_speed(SpeedType speed) override
     {
         send_traction_message(TractionDefs::speed_set_payload(speed));
         lastSetSpeed_ = speed;
+        estopActive_ = false;
     }
 
     SpeedType get_speed() override
@@ -236,7 +255,15 @@ public:
     void set_emergencystop() override
     {
         send_traction_message(TractionDefs::estop_set_payload());
+        estopActive_ = true;
         lastSetSpeed_.set_mph(0);
+    }
+
+    /// Get the current E-Stop state.
+    /// @return true if the train is E-Stopped, else false
+    bool get_emergencystop() override
+    {
+        return estopActive_;
     }
 
     void set_fn(uint32_t address, uint16_t value) override
@@ -317,6 +344,15 @@ private:
     {
         switch (message()->data()->cmd)
         {
+            case Command::CMD_SET_DST:
+            {
+                if (assigned_)
+                {
+                    return return_with_error(ERROR_ASSIGNED);
+                }
+                dst_ = input()->dst;
+                return return_ok();
+            }
             case Command::CMD_ASSIGN_TRAIN:
             {
                 if (assigned_)
@@ -552,7 +588,10 @@ private:
                 if (TractionDefs::speed_get_parse_last(p, &v))
                 {
                     lastSetSpeed_ = v;
-                    // TODO(balazs.racz): call a callback for the client.
+                    /// @todo (balazs.racz): call a callback for the client.
+
+                    /// @todo (Stuart.Baker): Do we need to do anything with
+                    /// estopActive_?
                 }
                 return;
             }
@@ -695,10 +734,20 @@ private:
                 if (TractionDefs::speed_get_parse_last(p, &v))
                 {
                     lastSetSpeed_ = v;
+                    estopActive_ = false;
                     if (updateCallback_)
                     {
                         updateCallback_(-1);
                     }
+                }
+                return;
+            }
+            case TractionDefs::REQ_EMERGENCY_STOP:
+            {
+                estopActive_ = true;
+                if (updateCallback_)
+                {
+                    updateCallback_(-1);
                 }
                 return;
             }
@@ -765,6 +814,7 @@ private:
     void clear_cache()
     {
         lastSetSpeed_ = nan_to_speed();
+        estopActive_ = false;
         lastKnownFn_.clear();
     }
 
@@ -792,6 +842,8 @@ private:
     bool assigned_{false};
     /// True if we also have a consist link with the assigned loco.
     bool listenConsist_{false};
+    /// keep track if E-Stop is active
+    bool estopActive_{false};
     NodeID dst_;
     Node *node_;
     /// Helper class for stateful query/return flows.

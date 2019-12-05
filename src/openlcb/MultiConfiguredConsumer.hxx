@@ -37,12 +37,14 @@
 #define _OPENLCB_MULTICONFIGUREDCONSUMER_HXX_
 
 #include "openlcb/ConfigRepresentation.hxx"
+#include "openlcb/ConfiguredConsumer.hxx"
+#include "utils/format_utils.hxx"
 
 namespace openlcb
 {
 
 /// Version of the @ref ConfiguredConsumer class that can handle many GPIO pins
-/// with two events each. This saves very significan amount of memory compared
+/// with two events each. This saves very significant amount of memory compared
 /// to instantiating individual ConfigredConsumer instances -- helpful when a
 /// single small MCU is exporting a large number of IOs via for example shift
 /// register outputs.
@@ -52,16 +54,33 @@ class MultiConfiguredConsumer : public ConfigUpdateListener,
 public:
     typedef ConsumerConfig config_entry_type;
 
+    /// Usage: ```
+    ///
+    /// constexpr const Gpio *const kDirectGpio[] = {
+    /// TDRV1_Pin::instance(), TDRV2_Pin::instance(),
+    /// TDRV3_Pin::instance(), TDRV4_Pin::instance(),
+    /// };
+    /// openlcb::MultiConfiguredConsumer direct_consumers(stack.node(),
+    ///    kDirectGpio, ARRAYSIZE(kDirectGpio), cfg.seg().direct_consumers());
+    /// ```
+    ///
+    /// @param node is the OpenLCB node object from the stack.
+    /// @param pins is the list of pins represented by the Gpio* object
+    /// instances. Can be constant from FLASH space.
+    /// @param size is the length of the list of pins array.
+    /// @param config is the repeated group object from the configuration space
+    /// that represents the locations of the events.
     template <unsigned N>
-    __attribute__((noinline))
-    MultiConfiguredConsumer(Node *node, const Gpio *const *pins, unsigned size,
+    __attribute__((noinline)) MultiConfiguredConsumer(Node *node,
+        const Gpio *const *pins, unsigned size,
         const RepeatedGroup<config_entry_type, N> &config)
         : node_(node)
         , pins_(pins)
         , size_(N)
         , offset_(config)
     {
-        HASSERT(size_ == N);
+        // Mismatched sizing of the GPIO array from the configuration array.
+        HASSERT(size == N);
         ConfigUpdateService::instance()->register_update_listener(this);
     }
 
@@ -99,9 +118,30 @@ public:
         return REINIT_NEEDED; // Causes events identify.
     }
 
-    /// @todo(balazs.racz): implement
     void factory_reset(int fd) OVERRIDE
     {
+        RepeatedGroup<config_entry_type, UINT_MAX> grp_ref(offset_.offset());
+        for (unsigned i = 0; i < size_; ++i)
+        {
+            grp_ref.entry(i).description().write(fd, "");
+        }
+    }
+
+    /// Factory reset helper function. Sets all names to something 1..N.
+    /// @param fd pased on from factory reset argument.
+    /// @param basename name of repeats.
+    void factory_reset_names(int fd, const char *basename)
+    {
+        RepeatedGroup<config_entry_type, UINT_MAX> grp_ref(offset_.offset());
+        for (unsigned i = 0; i < size_; ++i)
+        {
+            string v(basename);
+            v.push_back(' ');
+            char buf[10];
+            unsigned_integer_to_buffer(i+1, buf);
+            v += buf;
+            grp_ref.entry(i).description().write(fd, v);
+        }
     }
 
     // Implementations for the event handler functions.
@@ -114,7 +154,7 @@ public:
         {
             return done->notify();
         }
-        SendConsumerIdentified(registry_entry, done);
+        SendConsumerIdentified(registry_entry, event, done);
     }
 
     void handle_identify_consumer(const EventRegistryEntry &registry_entry,
@@ -125,7 +165,7 @@ public:
         {
             return done->notify();
         }
-        SendConsumerIdentified(registry_entry, done);
+        SendConsumerIdentified(registry_entry, event, done);
     }
 
     void handle_event_report(const EventRegistryEntry &registry_entry,
@@ -145,7 +185,7 @@ private:
     /// Sends out a ConsumerIdentified message for the given registration
     /// entry.
     void SendConsumerIdentified(const EventRegistryEntry &registry_entry,
-                                BarrierNotifiable *done)
+        EventReport *event, BarrierNotifiable *done)
     {
         Defs::MTI mti = Defs::MTI_CONSUMER_IDENTIFIED_VALID;
         unsigned b1 = pins_[registry_entry.user_arg >> 1]->is_set() ? 1 : 0;
@@ -154,9 +194,9 @@ private:
         {
             mti++; // INVALID
         }
-        event_write_helper3.WriteAsync(node_, mti, WriteHelper::global(),
-                                       eventid_to_buffer(registry_entry.event),
-                                       done);
+        event->event_write_helper<3>()->WriteAsync(node_, mti,
+            WriteHelper::global(), eventid_to_buffer(registry_entry.event),
+            done);
     }
 
     /// Removed registration of this event handler from the global event

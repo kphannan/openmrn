@@ -43,14 +43,10 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <ifaddrs.h>
 
 // Simplelink includes
-#include "CC3200_compat/simplelink.h"
-#ifdef SL_API_V2
-//#include "sl_socket.h"
-#else
-//#include "socket.h"
-#endif
+#include <ti/drivers/net/wifi/simplelink.h>
 
 #include "utils/format_utils.hxx"
 
@@ -167,28 +163,28 @@ int CC32xxSocket::socket(int domain, int type, int protocol)
             default:
                 SlCheckResult(result);
                 break;
-            case SL_EAFNOSUPPORT:
+            case SL_ERROR_BSD_EAFNOSUPPORT:
                 errno = EAFNOSUPPORT;
                 break;
-            case SL_EPROTOTYPE:
+            case SL_ERROR_BSD_EPROTOTYPE:
                 errno = EPROTOTYPE;
                 break;
-            case SL_EACCES:
+            case SL_ERROR_BSD_EACCES:
                 errno = EACCES;
                 break;
-            case SL_ENSOCK:
+            case SL_ERROR_BSD_ENSOCK:
                 errno = EMFILE;
                 break;
-            case SL_ENOMEM:
+            case SL_ERROR_BSD_ENOMEM:
                 errno = ENOMEM;
                 break;
-            case SL_EINVAL:
+            case SL_ERROR_BSD_EINVAL:
                 errno = EINVAL;
                 break;
-            case SL_EPROTONOSUPPORT:
+            case SL_ERROR_BSD_EPROTONOSUPPORT:
                 errno = EPROTONOSUPPORT;
                 break;
-            case SL_EOPNOTSUPP:
+            case SL_ERROR_BSD_EOPNOTSUPP:
                 errno = EOPNOTSUPP;
                 break;
         }
@@ -313,14 +309,17 @@ int CC32xxSocket::accept(int socket, struct sockaddr *address,
             default:
                 SlCheckResult(result);
                 break;
-            case SL_ENSOCK:
+            case SL_ERROR_BSD_ENSOCK:
                 errno = EMFILE;
                 break;
             case SL_POOL_IS_EMPTY:
                 usleep(10000);
                 /* fall through */
-            case SL_EAGAIN:
+            case SL_ERROR_BSD_EAGAIN:
                 errno = EAGAIN;
+                break;
+            case SL_RET_CODE_STOP_IN_PROGRESS:
+                errno = ECONNABORTED;
                 break;
         }
         return -1;
@@ -396,13 +395,16 @@ int CC32xxSocket::connect(int socket, const struct sockaddr *address,
                 SlCheckResult(result);
                 break;
             }
-            case SL_EISCONN:
+            case SL_RET_CODE_STOP_IN_PROGRESS:
+                errno = ENETUNREACH;
+                break;
+            case SL_ERROR_BSD_EISCONN:
                 errno = EISCONN;
                 break;
-            case SL_ECONNREFUSED:
+            case SL_ERROR_BSD_ECONNREFUSED:
                 errno = ECONNREFUSED;
                 break;
-            case SL_EALREADY:
+            case SL_ERROR_BSD_EALREADY:
                 /** @todo the return value for a non-blocking connect is
                  * supposed to be EINPROGRESS, but the CC32xx returns EALREADY
                  * instead.
@@ -412,12 +414,13 @@ int CC32xxSocket::connect(int socket, const struct sockaddr *address,
             case SL_POOL_IS_EMPTY:
                 usleep(10000);
             /* fall through */
-            case SL_EAGAIN:
+            case SL_ERROR_BSD_EAGAIN:
                 errno = EAGAIN;
                 break;
         }
         return -1;
     }
+
     return result;  
 }
 
@@ -448,24 +451,23 @@ ssize_t CC32xxSocket::recv(int socket, void *buffer, size_t length, int flags)
             case SL_POOL_IS_EMPTY:
                 usleep(10000);
                 /* fall through */
-            case SL_EAGAIN:
+            case SL_ERROR_BSD_EAGAIN:
                 errno = EAGAIN;
                 s->readActive = false;
                 break;
-            case SL_ECONNREFUSED:
+            case SL_ERROR_BSD_ECONNREFUSED:
                 s->readActive = true;
                 return 0;
+            case SL_ERROR_BSD_EBADF:
+                errno = EBADF;
+                break;
+            case SL_RET_CODE_STOP_IN_PROGRESS:
+                errno = ECONNRESET;
+                break;
         }
         return -1;
     }
-    if ((size_t)result < length)
-    {
-        s->readActive = false;
-    }
-    else
-    {
-        s->readActive = true;
-    }
+
     return result;  
 }
 
@@ -484,18 +486,31 @@ ssize_t CC32xxSocket::send(int socket, const void *buffer, size_t length, int fl
         return -1;
     }
 
+    if (s->writeActive == false)
+    {
+        /* typically we would never get here as callers usually go to select()
+         * before attempting a send again. */
+        HASSERT(s->mode_ & O_NONBLOCK);
+        errno = EAGAIN;
+        return -1;
+    }
+
     int result = sl_Send(s->sd, buffer, length, flags);
 
     if (result < 0)
     {
         switch (result)
         {
-            case SL_SOC_ERROR:
+            case SL_ERROR_BSD_SOC_ERROR:
                 /// @todo (stbaker): handle errors via the callback.
                 errno = ECONNRESET;
                 break;
-            case SL_EAGAIN:
+            case SL_ERROR_BSD_EAGAIN:
                 errno = EAGAIN;
+                s->writeActive = false;
+                break;
+            case SL_ERROR_BSD_EBADF:
+                errno = EBADF;
                 break;
             default:
                 /// @todo (stbaker): handle errors via the callback.
@@ -504,14 +519,7 @@ ssize_t CC32xxSocket::send(int socket, const void *buffer, size_t length, int fl
         }
         return -1;
     }
-    if ((size_t)result < length)
-    {
-        s->writeActive = false;
-    }
-    else
-    {
-        s->writeActive = true;
-    }
+
     return result;
 }
 
@@ -864,11 +872,19 @@ int CC32xxSocket::fcntl(File *file, int cmd, unsigned long data)
         case F_SETFL:
         {
             SlSockNonblocking_t sl_option_value;
-            sl_option_value.SL_NonblockingEnabled = data & O_NONBLOCK ? 1 : 0;
+            sl_option_value.NonBlockingEnabled = data & O_NONBLOCK ? 1 : 0;
             int result = sl_SetSockOpt(s->sd, SL_SOL_SOCKET,
                                        SL_SO_NONBLOCKING, &sl_option_value,
                                        sizeof(sl_option_value));
             SlCheckResult(result, 0);
+            if (data & O_NONBLOCK)
+            {
+                mode_ |= O_NONBLOCK;
+            }
+            else
+            {
+                mode_ &= ~O_NONBLOCK;
+            }
             return 0;
         }
     }
@@ -1079,7 +1095,6 @@ int getaddrinfo(const char *nodename, const char *servname,
     std::unique_ptr<struct sockaddr> sa(new struct sockaddr);
     if (sa.get() == nullptr)
     {
-        free(*res);
         return EAI_MEMORY;
     }
     memset(sa.get(), 0, sizeof(struct sockaddr));
@@ -1121,11 +1136,11 @@ int getaddrinfo(const char *nodename, const char *servname,
             default:
             case SL_POOL_IS_EMPTY:
                 return EAI_AGAIN;
-            case SL_NET_APP_DNS_QUERY_NO_RESPONSE:
-            case SL_NET_APP_DNS_NO_SERVER:
-            case SL_NET_APP_DNS_QUERY_FAILED:
-            case SL_NET_APP_DNS_MALFORMED_PACKET:
-            case SL_NET_APP_DNS_MISMATCHED_RESPONSE:
+            case SL_ERROR_NET_APP_DNS_QUERY_NO_RESPONSE:
+            case SL_ERROR_NET_APP_DNS_NO_SERVER:
+            case SL_ERROR_NET_APP_DNS_QUERY_FAILED:
+            case SL_ERROR_NET_APP_DNS_MALFORMED_PACKET:
+            case SL_ERROR_NET_APP_DNS_MISMATCHED_RESPONSE:
                 return EAI_FAIL;
         }
     }
@@ -1208,6 +1223,105 @@ const char *inet_ntop(int af, const void *src, char *dst, socklen_t size)
     }
 
     return org;
+}
+
+/*
+ * ::getifaddrs()
+ */
+int getifaddrs(struct ifaddrs **ifap)
+{
+    /* start with something "safe" in case we bail out early */
+    *ifap = nullptr;
+
+    /* allocate all the structure memory */
+    std::unique_ptr<struct ifaddrs> ia(new struct ifaddrs);
+    if (ia.get() == nullptr)
+    {
+        errno = ENOMEM;
+        return -1;
+    }
+    memset(ia.get(), 0, sizeof(struct ifaddrs));
+
+    std::unique_ptr<char[]> ifa_name(new char[6]);
+    if (ifa_name.get() == nullptr)
+    {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    std::unique_ptr<struct sockaddr> ifa_addr(new struct sockaddr);
+    if (ifa_addr == nullptr)
+    {
+        errno = ENOMEM;
+        return -1;
+    }
+    memset(ifa_addr.get(), 0, sizeof(struct sockaddr));
+
+    /** @todo support netmask and broadcast */
+#if 0
+    std::unique_ptr<struct sockaddr> ifa_netmask(new struct sockaddr);
+    if (ifa_netmask == nullptr)
+    {
+        errno = ENOMEM;
+        return -1;
+    }
+    memset(ifa_netmask.get(), 0, sizeof(struct sockaddr));
+
+    std::unique_ptr<struct sockaddr> ifa_broadaddr(new struct sockaddr);
+    if (ifa_broadaddr == nullptr)
+    {
+        errno = ENOMEM;
+        return -1;
+    }
+    memset(ifa_broadaddr.get(), 0, sizeof(struct sockaddr));
+#endif
+
+    /* setup interface address data */
+    strcpy(ifa_name.get(), "wlan0");
+
+    struct sockaddr_in *addr_in = (struct sockaddr_in*)ifa_addr.get();
+    addr_in->sin_family = AF_INET;
+    addr_in->sin_addr.s_addr = htonl(CC32xxWiFi::instance()->wlan_ip());
+
+    /* build up meta structure */
+    ia.get()->ifa_next = nullptr;
+    ia.get()->ifa_name = ifa_name.release();
+    ia.get()->ifa_flags = 0; /** @todo we don't support/check flags */
+    ia.get()->ifa_addr = ifa_addr.release();
+    ia.get()->ifa_netmask = nullptr;
+    ia.get()->ifa_ifu.ifu_broadaddr = nullptr;
+    ia.get()->ifa_data = nullptr;
+
+    /* report results */
+    *ifap = ia.release();
+    return 0;
+}
+
+/*
+ * ::getifaddrs()
+ */
+void freeifaddrs(struct ifaddrs *ifa)
+{
+    while (ifa)
+    {
+        struct ifaddrs *next = ifa->ifa_next;
+
+        HASSERT(ifa->ifa_data == nullptr);
+        HASSERT(ifa->ifa_ifu.ifu_broadaddr == nullptr);
+        HASSERT(ifa->ifa_netmask == nullptr);
+
+        if (ifa->ifa_addr)
+        {
+            delete ifa->ifa_addr;
+        }
+        if (ifa->ifa_name)
+        {
+            delete[] ifa->ifa_name;
+        }
+        delete ifa;
+
+        ifa = next;
+    }
 }
 
 } /* extern "C" */

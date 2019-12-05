@@ -31,6 +31,10 @@
  * @date 10 May 2014
  */
 
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200112L
+#endif
+
 #include "console/Console.hxx"
 
 #if defined (CONSOLE_NETWORKING)
@@ -42,6 +46,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <cstdio>
 
 /*
  * Console::Console()
@@ -77,7 +82,7 @@ Console::Console(ExecutorBase *executor, int fd_in, int fd_out, int port)
  */
 void Console::open_session(int fd_in, int fd_out)
 {
-#ifdef HAVE_BSDSOCKET
+#if OPENMRN_FEATURE_BSD_SOCKETS
     fcntl(fd_in, F_SETFL, fcntl(fd_in, F_GETFL, 0) | O_NONBLOCK);
 #endif
     new Session(this, fd_in, fd_out);
@@ -250,7 +255,25 @@ StateFlowBase::Action Console::Listen::accept()
 #endif
 
 /*
- * Console::Listen::process_read()
+ * Console::Session::Session()
+ */
+Console::Session::Session(Service *service, int fd_in, int fd_out)
+    : StateFlowBase(service)
+    , fdIn(fd_in)
+    , fdOut(fd_out)
+    , fp(fdopen(fd_out, "w"))
+    , line((char*)malloc(64))
+    , line_size(64)
+    , pos(0)
+    , selectHelper(this)
+    , command(nullptr)
+{
+    prompt(fp);
+    start_flow(STATE(entry));
+}
+
+/*
+ * Console::Session::process_read()
  */
 StateFlowBase::Action Console::Session::process_read()
 {
@@ -260,7 +283,7 @@ StateFlowBase::Action Console::Session::process_read()
     {
         struct stat stat;
         fstat(fdIn, &stat);
-#ifdef HAVE_BSDSOCKET
+#if OPENMRN_FEATURE_BSD_SOCKETS
         if (S_ISSOCK(stat.st_mode))
         {
             /* Socket connection closed */
@@ -416,7 +439,7 @@ bool Console::Session::callback_result_process(CommandStatus status,
         {
             struct stat stat;
             fstat(fdIn, &stat);
-#ifdef HAVE_BSDSOCKET
+#if OPENMRN_FEATURE_BSD_SOCKETS
             if (S_ISSOCK(stat.st_mode))
             {
                 fprintf(fp, "shutting down session\n");

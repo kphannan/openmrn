@@ -172,7 +172,7 @@ TEST_F(AsyncRawDatagramTest, MultiFrameDatagramThenStartMiddle)
 
 ::std::ostream &operator<<(::std::ostream &o, const NodeHandle &h)
 {
-    o << StringPrintf("Handle(%012llx, %03x)", h.id, h.alias);
+    o << StringPrintf("Handle(%012" PRIx64 ", %03x)", h.id, h.alias);
     return o;
 }
 
@@ -973,7 +973,7 @@ public:
         {
             DIE("Unexpected notification from the datagram client.");
         }
-        if (!clientFlow_->result() & DatagramClient::OPERATION_SUCCESS)
+        if (!(clientFlow_->result() & DatagramClient::OPERATION_SUCCESS))
         {
             LOG(WARNING, "Error sending response datagram for PingPong: %x",
                 clientFlow_->result());

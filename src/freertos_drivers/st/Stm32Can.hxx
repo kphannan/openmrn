@@ -36,14 +36,16 @@
 
 #include <cstdint>
 
-#include "Can.hxx"
+#include "freertos_drivers/common/Can.hxx"
 
-#if defined(STM32F072xB)
+#if defined(STM32F072xB) || defined(STM32F091xC) 
 #include "stm32f0xx_hal_can.h"
 #elif defined(STM32F103xB)
 #include "stm32f1xx_hal_can.h"
-#elif defined(STM32F303xC)
+#elif defined(STM32F303xC) || defined(STM32F303xE)
 #include "stm32f3xx_hal_can.h"
+#elif defined(STM32F767xx)
+#include "stm32f7xx_hal_can.h"
 #else
 #error Dont know what STM32 chip you have.
 #endif
@@ -88,5 +90,11 @@ private:
 
     DISALLOW_COPY_AND_ASSIGN(Stm32Can);
 };
+
+#ifdef ARDUINO
+
+extern void arduino_can_pinmap(PinName tx_pin, PinName rx_pin);
+
+#endif
 
 #endif /* _FREERTOS_DRIVERS_ST_STM32F0XXCAN_HXX_ */

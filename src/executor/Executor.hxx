@@ -87,7 +87,7 @@ public:
      * the execution is completed. @param fn is the closure to run. */
     void sync_run(std::function<void()> fn);
 
-#ifdef __FreeRTOS__
+#if OPENMRN_FEATURE_RTOS_FROM_ISR
     /** Send a message to this Executor's queue. Callable from interrupt
      * context.
      * @param action Executable instance to insert into the input queue
@@ -95,7 +95,7 @@ public:
      */
     virtual void add_from_isr(Executable *action,
                               unsigned priority = UINT_MAX) = 0;
-#endif
+#endif // OPENMRN_FEATURE_RTOS_FROM_ISR
 
     /** Adds a file descriptor to be watched to the select loop.
      * @param job Selectable structure that describes the descriptor to watch.
@@ -153,12 +153,18 @@ public:
     /// @return the thread handle.
     os_thread_t thread_handle() { return OSThread::get_handle(); }
 
+    OSThread& thread() { return *this; }
+    
     /// Die if we are not on the current executor.
     void assert_current() { HASSERT(os_thread_self() == thread_handle()); }
     
     /// @return a number that gets incremented by one every time an executable
     /// runs.
     virtual uint32_t sequence() = 0;
+
+    /// Helper function for debugging and tracing.
+    /// @return currently running executable or nullptr if none active.
+    Executable* volatile current() { return current_; }
     
 protected:
     /** Thread entry point.
@@ -172,23 +178,6 @@ protected:
     OSSelectWakeup selectHelper_;
 
 private:
-#ifndef ESP_NONOS
-    /** Wait for an item from the front of the queue.
-     * @param timeout time to wait in nanoseconds
-     * @param priority pass back the priority of the queue pulled from
-     * @return item retrieved from queue, else NULL with errno set:
-     *         ETIMEDOUT - timeout occured, EINTR - woken up asynchronously
-     */
-    virtual Executable *timedwait(long long timeout, unsigned *priority) = 0;
-#endif
-
-    /** Wait for an item from the front of the queue.
-     * @param priority pass back the priority of the queue pulled from
-     * @return item retrieved from queue, else NULL with errno set:
-     *         EINTR - woken up asynchronously
-     */
-    virtual Executable *wait(unsigned *priority) = 0;
-
     /** Retrieve an item from the front of the queue.
      * @param priority pass back the priority of the queue pulled from
      * @return item retrieved from queue, else NULL if queue is empty.
@@ -224,7 +213,7 @@ private:
     const char *name_;
 
     /** Currently executing closure. USeful for debugging crashes. */
-    Executable* current_;
+    Executable* volatile current_;
 
     /** List of active timers. */
     ActiveTimers activeTimers_;
@@ -325,7 +314,7 @@ public:
 #endif
     }
 
-#ifdef __FreeRTOS__
+#if OPENMRN_FEATURE_RTOS_FROM_ISR
     /** Send a message to this Executor's queue. Callable from interrupt
      * context.
      * @param msg Executable instance to insert into the input queue
@@ -333,11 +322,20 @@ public:
      */
     void add_from_isr(Executable *msg, unsigned priority = UINT_MAX) override
     {
-        queue_.insert_from_isr(
+#ifdef ESP32
+        // On the ESP32 we need to call insert instead of insert_locked to
+        // ensure that all code paths lock the queue for consistency since
+        // this code path is not guaranteed to be protected by a critical
+        // section.
+        queue_.insert(
             msg, priority >= NUM_PRIO ? NUM_PRIO - 1 : priority);
+#else
+        queue_.insert_locked(
+            msg, priority >= NUM_PRIO ? NUM_PRIO - 1 : priority);
+#endif // ESP32
         selectHelper_.wakeup_from_isr();
     }
-#endif
+#endif // OPENMRN_FEATURE_RTOS_FROM_ISR
 
     /** If the executor was created with NO_THREAD, then this function needs to
      * be called to run the executor loop. It will exit when the execut gets
@@ -356,33 +354,6 @@ public:
     uint32_t sequence() OVERRIDE { return sequence_; }
 
 private:
-#ifndef ESP_NONOS
-    /** Wait for an item from the front of the queue.
-     * @param timeout time to wait in nanoseconds
-     * @param priority pass back the priority of the queue pulled from
-     * @return item retrieved from queue, else NULL with errno set:
-     *         ETIMEDOUT - timeout occured, EINTR - woken up asynchronously
-     */
-    Executable *timedwait(long long timeout, unsigned *priority) OVERRIDE
-    {
-        auto result = queue_.timedwait(timeout);
-        *priority = result.index;
-        return static_cast<Executable*>(result.item);
-    }
-#endif
-
-    /** Wait for an item from the front of the queue.
-     * @param priority pass back the priority of the queue pulled from
-     * @return item retrieved from queue, else NULL with errno set:
-     *         EINTR - woken up asynchronously
-     */
-    Executable *wait(unsigned *priority) OVERRIDE
-    {
-        auto result = queue_.wait();
-        *priority = result.index;
-        return static_cast<Executable*>(result.item);
-    }
-
     /** Retrieve an item from the front of the queue.
      * @param priority pass back the priority of the queue pulled from
      * @return item retrieved from queue, else NULL if none waiting.
@@ -401,29 +372,34 @@ private:
     DISALLOW_COPY_AND_ASSIGN(Executor);
 
     /// Internal queue of executables waiting to be scheduled.
-    QListProtectedWait<NUM_PRIO> queue_;
+    QListProtected<NUM_PRIO> queue_;
 };
 
 /** This class can be given an executor, and will notify itself when that
  *   executor is out of work. Callers can pend on the sync notifiable to wait
  *   for that. */
-class ExecutorGuard : private Executable, public SyncNotifiable
+class ExecutorGuard : private ::Timer, public SyncNotifiable
 {
 public:
     /// Constructor. @param e is the executor to look for being empty.
-    ExecutorGuard(ExecutorBase* e)
-        : executor_(e) {
-        executor_->add(this);  // lowest priority
+    ExecutorGuard(ExecutorBase *e)
+        : ::Timer(e->active_timers())
+        , executor_(e)
+    {
+        // We wait on the front of the timer queue by expiring immediately.
+        start();
     }
 
     /// Implementation of the guard functionality. Called on the executor.
-    void run() override {
+    long long timeout() override {
         if (executor_->empty()) {
             SyncNotifiable::notify();
+            return NONE;
         } else {
-            executor_->add(this);  // wait more on the lowest priority
+            return RESTART;  // wait more on the front of the timer queue
         }
     }
+
 private:
     /// Parent.
     ExecutorBase* executor_;

@@ -4,11 +4,13 @@ CSRCS += errno_exit.c \
          ieeehalfprecision.c
 
 CXXSRCS += \
+	   Base64.cxx \
 	   CanIf.cxx \
 	   Crc.cxx \
 	   StringPrintf.cxx \
            Buffer.cxx \
            ConfigUpdateListener.cxx \
+           FileUtils.cxx \
            GcStreamParser.cxx \
            GcTcpHub.cxx \
            GridConnect.cxx \
@@ -24,6 +26,7 @@ CXXSRCS += \
            logging.cxx \
            SocketClient.cxx \
            socket_listener.cxx \
+           ServiceLocator.cxx \
 
 
 CXXTESTSRCS += BufferQueue.cxxtest \

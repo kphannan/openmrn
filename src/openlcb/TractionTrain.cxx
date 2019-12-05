@@ -197,7 +197,8 @@ struct TrainService::Impl
                 case TractionDefs::REQ_EMERGENCY_STOP:
                 {
                     train_node()->train()->set_emergencystop();
-                    return release_and_exit();
+                    nextConsistIndex_ = 0;
+                    return call_immediately(STATE(maybe_forward_consist));
                 }
                 case TractionDefs::REQ_QUERY_SPEED: // fall through
                 case TractionDefs::REQ_QUERY_FN:
@@ -369,10 +370,15 @@ struct TrainService::Impl
                             Defs::ERROR_INVALID_ARGS_MESSAGE_TOO_SHORT);
                     NodeID target = data_to_node_id(payload() + 3);
                     uint8_t flags = payload()[2];
-                    bool resp = train_node()->add_consist(target, flags);
+                    if (target == train_node()->node_id())
+                    {
+                        return init_and_send_response(
+                            TractionDefs::consist_add_response(
+                                target, Defs::ERROR_OPENMRN_ALREADY_EXISTS));
+                    }
+                    train_node()->add_consist(target, flags);
                     return init_and_send_response(
-                        TractionDefs::consist_add_response(target,
-                            resp ? 0 : Defs::ERROR_OPENMRN_ALREADY_EXISTS));
+                        TractionDefs::consist_add_response(target, 0));
                 }
                 case TractionDefs::CNSTREQ_DETACH_NODE:
                 {
